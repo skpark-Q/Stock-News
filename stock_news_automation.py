@@ -23,27 +23,36 @@ def get_stock_keywords():
         worksheet = sh.worksheet("주식키워드")
         records = worksheet.get_all_records()
         print(f"📢 시트에서 총 {len(records)}개의 행을 읽어왔습니다.")
-        return [{str(k).strip(): v for k, v in r.items()} for r in records]
+        # Status가 'Active'인 것만 미리 필터링해서 에너지를 아낍니다!
+        active_list = [
+            {str(k).strip(): v for k, v in r.items()} 
+            for r in records 
+            if str(r.get('Status', '')).strip().lower() == 'active'
+        ]
+        print(f"✅ 그 중 'Active' 상태인 종목은 {len(active_list)}개입니다.")
+        return active_list
     except Exception as e:
         print(f"❌ 시트 읽기 에러: {e}")
         return []
 
 def fetch_news_brief(ticker):
-    """최근 3일 뉴스 검색"""
+    """뉴스 수집 및 할당량 체크"""
     three_days = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
     try:
         news = newsapi.get_everything(q=ticker, from_param=three_days, language='en', sort_by='relevancy')
         articles = news.get('articles', [])
-        print(f"📰 {ticker}: 뉴스 {len(articles)}건 발견")
         return articles[:2]
     except Exception as e:
-        print(f"❌ {ticker} 뉴스 수집 실패: {e}")
+        if "rateLimited" in str(e):
+            print(f"⚠️ 뉴스 할당량 초과! 오늘은 더 이상 뉴스를 가져올 수 없습니다.")
+        else:
+            print(f"❌ {ticker} 뉴스 수집 실패: {e}")
         return []
 
 def analyze_with_iron_will(ticker, name, news_list):
-    """AI 분석 수행 (모델 고정: gemini-1.5-flash)"""
+    """AI 분석 수행 (함수 이름 오타 수정 완료!)"""
     if not news_list:
-        return "최근 3일간 주요 뉴스가 발견되지 않았습니다. 조용한 하루네요!"
+        return "최근 주요 뉴스가 발견되지 않았습니다. 조용한 하루네요!"
     
     news_text = "\n".join([f"- {n['title']}" for n in news_list])
     prompt = f"{ticker}({name}) 뉴스 3줄 요약 및 투자 심리 알려줘.\n뉴스:\n{news_text}"
@@ -54,22 +63,21 @@ def analyze_with_iron_will(ticker, name, news_list):
             return response.text
         except Exception as e:
             wait_time = 40 * (attempt + 1)
-            print(f"🚨 {ticker} 요약 지연... {wait_time}초 대기 중 ({e})")
+            print(f"🚨 {ticker} 요약 지연... {wait_time}초 대기 중")
             time.sleep(wait_time)
             
-    return "⚠️ AI가 너무 바빠서 분석을 완료하지 못했습니다. 뉴스 제목을 직접 확인해 보세요!"
+    return "⚠️ AI 분석 지연으로 요약을 완료하지 못했습니다."
 
 def discover_hot_tickers():
-    """오늘의 핫 종목 발굴 (형식 파괴 방지)"""
+    """오늘의 핫 종목 발굴"""
     print("🌟 오늘의 시장 주인공 찾는 중...")
     try:
         top = newsapi.get_top_headlines(category='business', country='us')
         headlines = "\n".join([a['title'] for a in top['articles'][:10]])
-        prompt = f"다음 뉴스 중 가장 핫한 주식 티커 2개만 골라줘. 다른 말 하지 말고 딱 ['TICKER1', 'TICKER2'] 형식으로만 보내.\n뉴스:\n{headlines}"
+        prompt = f"다음 뉴스 중 가장 핫한 주식 티커 2개만 골라줘. ['TICKER1', 'TICKER2'] 형식으로 답변해.\n뉴스:\n{headlines}"
         
         response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
         text = response.text.strip()
-        # AI가 가끔 ```json ... ``` 처럼 보낼 때를 대비해 정제합니다.
         if "[" in text and "]" in text:
             start, end = text.find("["), text.find("]") + 1
             return eval(text[start:end])
@@ -84,37 +92,30 @@ if __name__ == "__main__":
     
     # 1. 관심 종목 분석
     total_report += "--- [1부: 형님의 관심 종목 현황] ---\n\n"
-    active_count = 0
     for stock in stocks:
-        # 대소문자 상관없이 'active'면 실행하도록 고쳤습니다!
-        status = str(stock.get('Status', '')).strip().lower()
-        if status == 'active':
-            active_count += 1
-            t, n = stock.get('Ticker'), stock.get('Name')
-            print(f"🔍 {n}({t}) 분석 시작...")
-            news = fetch_news_brief(t)
-            summary = analyze_iron_will(t, n, news)
-            total_report += f"📊 [{t} - {n}]\n{summary}\n"
-            total_report += "="*40 + "\n"
-            time.sleep(20) # 넉넉한 휴식
+        t, n = stock.get('Ticker'), stock.get('Name')
+        print(f"🔍 {n}({t}) 분석 시작...")
+        news = fetch_news_brief(t)
+        # 여기서 오타 수정된 함수를 부릅니다!
+        summary = analyze_with_iron_will(t, n, news)
+        total_report += f"📊 [{t} - {n}]\n{summary}\n"
+        total_report += "="*40 + "\n"
+        time.sleep(20)
     
-    if active_count == 0:
-        total_report += "형님! 시트에서 'Active'로 설정된 종목을 하나도 못 찾았습니다. 시트 상태를 확인해 주세요!\n"
-
     # 2. AI 핫 종목 분석
     hot_tickers = discover_hot_tickers()
     total_report += "\n🚀 [2부: AI가 오늘 시장에서 긴급 발굴한 핫 종목!]\n\n"
     for t in hot_tickers:
         print(f"🔥 핫 종목 {t} 분석 시작...")
         news = fetch_news_brief(t)
-        summary = analyze_iron_will(t, t, news)
+        summary = analyze_with_iron_will(t, t, news)
         total_report += f"🌟 오늘의 HOT - {t}\n{summary}\n"
         total_report += "="*40 + "\n"
         time.sleep(20)
     
     # 이메일 전송
     msg = MIMEText(total_report)
-    msg['Subject'] = f"[{datetime.now().strftime('%Y-%m-%d')}] 형님! 오늘의 주식 리포트 (블랙박스 버전)"
+    msg['Subject'] = f"[{datetime.now().strftime('%Y-%m-%d')}] 형님! 오늘의 주식 리포트"
     msg['From'], msg['To'] = EMAIL_ADDRESS, EMAIL_ADDRESS
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
         s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
