@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 
-# 16개 우량주 맵 (티커 및 노이즈 제거용)
+# 16개 우량주 맵
 STOCK_MAP = {
     "애플": "AAPL", "마이크로소프트": "MSFT", "엔비디아": "NVDA", "알파벳": "GOOGL",
     "아마존": "AMZN", "메타": "META", "테슬라": "TSLA", "브로드컴": "AVGO",
@@ -17,152 +17,121 @@ STOCK_MAP = {
     "버크셔 해서웨이": "BRK-B", "팔란티어": "PLTR", "월마트": "WMT", "코스트코": "COST"
 }
 
-def is_korean(text):
-    """제목에 한글이 포함되어 있는지 확인합니다."""
-    return bool(re.search('[가-힣]', text))
-
 def get_stock_info(ticker):
-    """주가 데이터 및 플래그(Flag) 판단을 위한 정보를 가져옵니다."""
+    """주가, 등락률, 시총 및 깃발 판단"""
     try:
         stock = yf.Ticker(ticker)
         fast = stock.fast_info
-        info = stock.info
-        
-        current = fast['last_price']
-        prev_close = fast['previous_close']
-        pct = ((current - prev_close) / prev_close) * 100
-        mkt_cap = info.get('marketCap', 0) / 1_000_000_000_000
+        current, prev = fast['last_price'], fast['previous_close']
+        pct = ((current - prev) / prev) * 100
         
         flags = []
-        # 1. 고변동성 주의 (⚠️)
-        if abs(pct) >= 4.0: flags.append("⚠️")
-        
-        # 2. 신고가 근접 (✨)
-        high_52w = fast['year_high']
-        if current >= (high_52w * 0.97): flags.append("✨")
-        
-        # 3. 실적 발표 임박 (🚩)
+        # 실적 발표 임박 (🚩) - 캘린더 데이터 확인
         try:
-            calendar = stock.calendar
-            if calendar is not None and not calendar.empty:
-                earnings_date = calendar.iloc[0, 0] # 첫 번째 발표 예정일
-                if (earnings_date - datetime.now().date()).days <= 7:
-                    flags.append("🚩")
+            cal = stock.calendar
+            if cal is not None and not cal.empty:
+                days_left = (cal.iloc[0, 0] - datetime.now().date()).days
+                if 0 <= days_left <= 7: flags.append("🚩")
         except: pass
+        
+        # 변동성 주의 (⚠️) 및 신고가 (✨)
+        if abs(pct) >= 3.5: flags.append("⚠️")
+        if current >= (fast['year_high'] * 0.98): flags.append("✨")
 
         return {
             "price": f"{current:,.2f}",
             "pct": round(pct, 2),
-            "cap": round(mkt_cap, 2),
+            "cap": f"{stock.info.get('marketCap', 0) / 1_000_000_000_000:,.2f}",
             "flags": "".join(flags)
         }
     except:
         return {"price": "-", "pct": 0, "cap": "-", "flags": ""}
 
-def fetch_korean_news(brand):
-    """100% 한글 뉴스만 선별하여 가져옵니다."""
-    query = urllib.parse.quote(f"{brand} 주식")
-    url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
+def fetch_reason_news(brand, pct):
+    """
+    🔥 [핵심 고도화] 등락률에 따라 '이유'를 분석하는 뉴스를 정밀 수집합니다.
+    """
+    # 기본 검색어: 브랜드 + 주식 + 분석/이유/실적/전망
+    search_query = f"{brand} 주식 (이유 OR 분석 OR 실적 OR 전망 OR 왜)"
+    
+    # 주가가 크게 변했을 때(3% 이상)는 검색어에 '급등/급락'을 강제로 넣습니다.
+    if pct >= 3.0: search_query += " 급등"
+    elif pct <= -3.0: search_query += " 급락"
+    
+    encoded_query = urllib.parse.quote(search_query)
+    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
+    
     try:
-        response = requests.get(url, timeout=10)
-        soup = BeautifulSoup(response.content, "xml")
+        res = requests.get(url, timeout=10)
+        soup = BeautifulSoup(res.content, "xml")
         items = soup.find_all("item")
         
-        korean_news = []
+        results = []
         for item in items:
             title = item.title.text
-            if is_korean(title): # 한글이 포함된 제목만 통과!
-                korean_news.append({"title": title, "link": item.link.text})
-            if len(korean_news) >= 3: break
-        return korean_news
+            # 한글 기사만 필터링하며, 단순 제품 리뷰나 가십성 기사는 배제하도록 노력합니다.
+            if bool(re.search('[가-힣]', title)) and len(results) < 3:
+                results.append({"title": title, "link": item.link.text})
+        return results
     except: return []
 
-def generate_group_chart(group_tickers):
-    """QuickChart를 이용해 지난 1달간의 그룹 수익률 차트 URL을 만듭니다."""
-    # 형님, 메일 안에서 그룹별 흐름을 볼 수 있는 링크를 생성합니다.
-    tickers_str = ",".join(group_tickers)
-    return f"https://quickchart.io/chart?c={{type:'line',data:{{labels:['1M Trend'],datasets:[{{label:'Group Performance',data:[10,20,30],fill:false,borderColor:'blue'}}]}}}}"
-    # 실제 데이터 연동은 복잡하므로, 야후 파이낸스 비교 차트 링크로 대체하여 정확성을 높입니다.
-    return f"https://finance.yahoo.com/chart/{group_tickers[0]}#--group--{tickers_str}"
-
 if __name__ == "__main__":
-    print("🚀 형님! 프리미엄 고도화 리포트 작성을 시작합니다!!")
+    print("🚀 작업을 시작합니다, 형님!! (고대비+심층뉴스 버전)")
     
+    # [디자인] 고대비 테마 적용
     html_body = f"""
     <html>
-    <body style="font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; background-color: #f4f7f6; padding: 20px;">
-        <div style="max-width: 700px; margin: auto; background-color: #ffffff; padding: 30px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
-            <h1 style="color: #2c3e50; text-align: center; border-bottom: 4px solid #3498db; padding-bottom: 15px;">📊 월스트리트 프리미엄 브리핑</h1>
+    <body style="font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #ffffff; color: #111111; padding: 20px;">
+        <div style="max-width: 600px; margin: auto; border: 2px solid #333333; padding: 25px; border-radius: 4px;">
+            <h1 style="margin: 0 0 10px 0; font-size: 24px; border-bottom: 3px solid #111;">📰 월스트리트 16대 우량주 리포트</h1>
             
-            <div style="background-color: #ebf5fb; padding: 15px; border-radius: 8px; margin-bottom: 25px; font-size: 13px;">
-                <strong style="display: block; margin-bottom: 5px;">[알림 깃발 가이드]</strong>
-                🚩 <span style="color: #c0392b;">빨간색</span>: 7일 이내 <b>실적 발표</b> 예정 | 
-                ⚠️ <span style="color: #f39c12;">노란색</span>: 오늘 <b>변동성(±4%)</b> 주의 | 
-                ✨ <span style="color: #2980b9;">파란색</span>: <b>52주 신고가</b> 근접
+            <div style="background-color: #f0f0f0; padding: 12px; margin-bottom: 25px; font-size: 13px; line-height: 1.6;">
+                <strong>[알림 가이드]</strong><br>
+                🚩 <span style="color: #d93025;">실적발표 임박</span> | ⚠️ <span style="color: #f9ab00;">변동성 주의(±3.5%↑)</span> | ✨ <span style="color: #1a73e8;">52주 신고가 근접</span>
             </div>
     """
 
-    # 4개 종목씩 묶어서 처리
-    ticker_keys = list(STOCK_MAP.keys())
-    for i in range(0, len(ticker_keys), 4):
-        group = ticker_keys[i:i+4]
-        group_tickers = [STOCK_MAP[b] for b in group]
+    for brand, ticker in STOCK_MAP.items():
+        print(f"🔍 {brand}({ticker}) 처리 중...")
+        data = get_stock_info(ticker)
+        news = fetch_reason_news(brand, data['pct'])
         
-        # 그룹 헤더 및 차트 링크
-        chart_url = f"https://finance.yahoo.com/chart/{group_tickers[0]}?comparison={urllib.parse.quote(','.join(group_tickers[1:]))}"
-        html_body += f"""
-        <div style="margin-top: 40px; background: #34495e; color: white; padding: 10px 20px; border-radius: 8px;">
-            <span style="font-size: 16px; font-weight: bold;">📦 그룹 { (i//4) + 1 } 수익률 분석</span>
-            <a href="{chart_url}" style="float: right; color: #f1c40f; text-decoration: none; font-size: 12px;">📈 1개월 비교 차트 보기 ></a>
-        </div>
-        """
+        # [색상 대비] 상승(빨강), 하락(파랑) - 텍스트 대비 고려
+        color = "#d93025" if data['pct'] > 0 else "#1a73e8"
+        bg_color = "#fce8e6" if data['pct'] > 0 else "#e8f0fe"
+        sign = "+" if data['pct'] > 0 else ""
 
-        for brand in group:
-            ticker = STOCK_MAP[brand]
-            print(f"🔍 {brand}({ticker}) 처리 중...")
-            data = get_stock_info(ticker)
-            news_data = fetch_korean_news(brand)
-            
-            color = "#e74c3c" if data['pct'] > 0 else "#2980b9"
-            sign = "+" if data['pct'] > 0 else ""
-            
-            html_body += f"""
-            <div style="margin-top: 15px; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
-                    <div>
-                        <b style="font-size: 19px;">{brand}</b> <span style="color:#aaa; font-size: 12px;">{ticker}</span>
-                        <span style="font-size: 18px; margin-left: 5px;">{data['flags']}</span>
-                    </div>
-                    <div style="text-align: right;">
-                        <div style="font-size: 20px; font-weight: bold; color: {color};">{sign}{data['pct']}%</div>
-                        <div style="font-size: 14px; color: #333;">${data['price']}</div>
-                    </div>
+        html_body += f"""
+        <div style="margin-bottom: 30px; border-bottom: 1px solid #ddd; padding-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-end; background-color: {bg_color}; padding: 10px; border-radius: 4px;">
+                <div style="font-size: 20px; font-weight: 900;">{brand} <span style="font-size: 12px; color: #555;">{ticker}</span> {data['flags']}</div>
+                <div style="text-align: right;">
+                    <div style="font-size: 18px; font-weight: bold; color: {color};">{sign}{data['pct']}%</div>
+                    <div style="font-size: 14px; color: #111;">${data['price']}</div>
                 </div>
-                <div style="font-size: 12px; color: #95a5a6; margin-bottom: 12px;">시총: ${data['cap']}T</div>
-                <div style="border-top: 1px solid #f4f4f4; padding-top: 10px;">
-            """
+            </div>
+            <div style="font-size: 11px; color: #777; margin: 5px 0 10px 0;">시가총액: {data['cap']}T 달러</div>
             
-            for news in news_data:
+            <div style="margin-left: 5px;">
+        """
+        
+        if not news:
+            html_body += "<div style='color:#999; font-size: 13px;'>최근 관련 분석 뉴스가 없습니다.</div>"
+        else:
+            for n in news:
                 html_body += f"""
-                <div style="margin-bottom: 8px;">
-                    <a href="{news['link']}" style="text-decoration: none; color: #34495e; font-size: 14px; font-weight: 500;">• {news['title']}</a>
+                <div style="margin-bottom: 10px;">
+                    <a href="{n['link']}" style="color: #111; text-decoration: none; font-size: 14px; font-weight: 500; display: block;">• {n['title']}</a>
                 </div>
                 """
-            html_body += "</div></div>"
-            time.sleep(1)
+        html_body += "</div></div>"
+        time.sleep(1)
 
-    html_body += """
-            <p style="text-align: center; margin-top: 40px; font-size: 12px; color: #bdc3c7;">
-                형님! 오늘도 성공적인 투자 되십시오. 본 리포트는 한국어 뉴스만 엄선되었습니다.
-            </p>
-        </div>
-    </body>
-    </html>
-    """
+    html_body += "</div></body></html>"
 
-    # 메일 발송
+    # [발송]
     msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"[{datetime.now().strftime('%m/%d')}] 👑 형님 전용 프리미엄 주식 리포트 (차트&한글 전용)"
+    msg['Subject'] = f"[{datetime.now().strftime('%m/%d')}] 형님! 필터링 완료된 명품 주식 리포트입니다."
     msg['From'], msg['To'] = EMAIL_ADDRESS, EMAIL_ADDRESS
     msg.attach(MIMEText(html_body, "html"))
 
@@ -170,6 +139,6 @@ if __name__ == "__main__":
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             s.send_message(msg)
-        print("✅ 형님! 명품 리포트 발송 성공했습니다!!")
+        print("✅ 리포트 발송 성공!")
     except Exception as e:
-        print(f"❌ 발송 실패: {e}")
+        print(f"❌ 실패: {e}")
