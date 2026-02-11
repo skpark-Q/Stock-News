@@ -37,53 +37,57 @@ def get_market_summary():
     except: return "데이터 로딩 중..."
 
 def get_stock_details(ticker):
-    """주가, 체력, 전문가 의견 등 정밀 수집"""
+    """지표별 정밀 색상 판단 및 데이터 수집"""
     try:
         s = yf.Ticker(ticker)
         f, info = s.fast_info, s.info
         curr, prev = f['last_price'], f['previous_close']
         pct = ((curr - prev) / prev) * 100
         
-        # 1. 상승여력 (Upside)
+        # 1. 상승여력 (Upside) & 컬러
         target = info.get('targetMeanPrice', 0)
         upside_val = ((target / curr) - 1) * 100 if target > 0 else 0
-        u_color = "#1a73e8" if upside_val > 15 else ("#d93025" if upside_val < 0 else "#333")
+        u_color = "#1a73e8" if upside_val > 15 else ("#d93025" if upside_val < 0 else "#111")
         
-        # 2. PER 및 배당률 (배당률 오류 수정!)
+        # 2. PER & 컬러
         per = info.get('trailingPE', 0)
+        p_color = "#1a73e8" if (isinstance(per, (int, float)) and per < 25) else ("#d93025" if (isinstance(per, (int, float)) and per > 40) else "#f9ab00")
+        
+        # 3. 배당률 (오류 수정 로직)
         div = info.get('dividendYield')
+        # yfinance 데이터가 간혹 %단위로 들어오는 경우를 대비해 0.1(10%) 초과 시 재계산
         if div is None: div_val = 0.0
-        else: div_val = div * 100 if div < 1 else div # 소수점/정수 데이터 구분 대응
+        elif div > 0.1: div_val = div # 이미 %로 들어온 경우
+        else: div_val = div * 100 # 소수로 들어온 경우
         
-        # 3. [신규] 52주 저점 대비 현재 위치 (바닥 판단)
+        d_color = "#1a73e8" if div_val >= 3 else ("#f9ab00" if div_val >= 1 else "#d93025")
+        
+        # 4. 52주 저점 대비 위치 & 컬러
         low_52w = f['year_low']
-        dist_from_low = ((curr / low_52w) - 1) * 100
-        
-        # 4. [신규] 전문가 투자의견
-        recommend = info.get('recommendationKey', 'N/A').replace('_', ' ').upper()
+        dist_low = ((curr / low_52w) - 1) * 100
+        l_color = "#1a73e8" if dist_low < 10 else ("#d93025" if dist_low > 30 else "#111")
 
         flags = []
         if abs(pct) >= 3.5: flags.append("⚠️")
         if curr >= (f['year_high'] * 0.98): flags.append("✨")
         try:
             if not s.calendar.empty:
-                days_left = (s.calendar.iloc[0, 0] - datetime.now().date()).days
-                if 0 <= days_left <= 7: flags.append("🚩")
+                d_left = (s.calendar.iloc[0, 0] - datetime.now().date()).days
+                if 0 <= d_left <= 7: flags.append("🚩")
         except: pass
 
         return {
             "price": f"{curr:,.2f}", "pct": round(pct, 2), "flags": "".join(flags),
             "upside": f"{upside_val:+.1f}%", "u_color": u_color,
-            "per": f"{per:.1f}" if isinstance(per, (int, float)) else "-",
-            "div": f"{div_val:.2f}%",
-            "dist_low": f"{dist_from_low:.1f}%",
-            "opinion": recommend,
+            "per": f"{per:.1f}" if isinstance(per, (int, float)) else "-", "p_color": p_color,
+            "div": f"{div_val:.2f}%", "d_color": d_color,
+            "dist_low": f"{dist_low:+.1f}%", "l_color": l_color,
+            "opinion": info.get('recommendationKey', 'N/A').replace('_', ' ').upper(),
             "cap": f"{info.get('marketCap', 0) / 1_000_000_000_000:,.1f}T"
         }
     except: return None
 
 def fetch_korean_news(brand):
-    """뉴스 크롤링"""
     q = urllib.parse.quote(f"{brand} 주식 분석")
     url = f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
     try:
@@ -92,7 +96,7 @@ def fetch_korean_news(brand):
         links = []
         for i in soup.find_all("item"):
             if bool(re.search('[가-힣]', i.title.text)):
-                links.append(f"<li style='margin-bottom:5px;'><a href='{i.link.text}' style='color:#333; text-decoration:none; font-size:13px;'>• {i.title.text}</a></li>")
+                links.append(f"<li style='margin-bottom:5px;'><a href='{i.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {i.title.text}</a></li>")
             if len(links) >= 3: break
         return "".join(links)
     except: return "<li>뉴스 정보 없음</li>"
@@ -102,14 +106,19 @@ if __name__ == "__main__":
     html = f"""
     <html>
     <body style="font-family: 'Malgun Gothic', sans-serif; background-color: #ffffff; padding: 20px;">
-        <div style="max-width: 650px; margin: auto; border: 1px solid #000; padding: 25px;">
-            <h1 style="border-bottom: 4px solid #111; padding-bottom: 10px; margin: 0;">🏛️ VIP 주식 전략 리포트</h1>
+        <div style="max-width: 650px; margin: auto; border: 2px solid #111; padding: 25px; border-radius: 10px;">
+            <h1 style="border-bottom: 4px solid #111; padding-bottom: 10px; margin: 0; text-align: center;">🏛️ VIP 주식 전략 리포트</h1>
             
-            <div style="background: #f1f1f1; padding: 15px; margin-top: 20px; font-size: 12px; border-left: 5px solid #333;">
-                <b>[📊 가이드]</b> VIX 20미만(🔵안정) / PER 25이하(🔵저평가) / 52주 저점 대비(0%에 가까울수록 바닥)<br>
-                🚩실적임박 | ⚠️변동성주의 | ✨신고가근접
+            <div style="background: #f8f9fa; border: 1px solid #ddd; padding: 15px; margin-top: 20px; font-size: 12px; line-height: 1.6;">
+                <b style="font-size: 14px; color: #111;">[📊 투자 지표 컬러 가이드]</b><br>
+                • <b>상승여력:</b> 전문가 목표가 대비 <span style="color:#1a73e8;">15%↑(🔵기회)</span> / <span style="color:#d93025;">마이너스(🔴고평가)</span><br>
+                • <b>저점대비:</b> 52주 저점에서 <span style="color:#1a73e8;">10%이내(🔵바닥)</span> / <span style="color:#d93025;">30%↑(🔴단기과열)</span><br>
+                • <b>PER:</b> <span style="color:#1a73e8;">25미만(🔵저평가)</span> / 25~40(🟠보통) / <span style="color:#d93025;">40초과(🔴고평가)</span><br>
+                • <b>배당률:</b> <span style="color:#1a73e8;">3%↑(🔵혜자)</span> / 1~3%(🟠보통) / <span style="color:#d93025;">1%미만(🔴낮음)</span><br>
+                <div style="margin-top:5px;">🚩실적임박 | ⚠️변동성주의 | ✨신고가근접</div>
             </div>
-            <p style="padding: 10px; background: #333; color:#fff; font-size: 14px; margin-top: 15px;"><b>🌍 시장 현황:</b> {m_context}</p>
+
+            <p style="padding: 12px; background: #111; color:#fff; font-size: 14px; margin-top: 15px; border-radius: 4px;"><b>🌍 시장 현황:</b> {m_context}</p>
     """
 
     for brand, ticker in STOCK_MAP.items():
@@ -117,28 +126,36 @@ if __name__ == "__main__":
         if not d: continue
         news = fetch_korean_news(brand)
         
-        # [형님 요청] 음영 처리: 상승은 연한 빨강, 하락은 연한 파랑
+        # [디자인] 주가 변동에 따른 헤더 음영 부활
         header_bg = "#fce8e6" if d['pct'] > 0 else "#e8f0fe"
         text_color = "#d93025" if d['pct'] > 0 else "#1a73e8"
 
         html += f"""
-        <div style="margin-top: 25px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;">
-            <div style="background: {header_bg}; padding: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="margin-top: 25px; border: 1px solid #eee; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+            <div style="background: {header_bg}; padding: 15px; display: flex; justify-content: space-between; align-items: center;">
                 <b style="font-size: 18px; color: #111;">{brand} <small style="color:#666;">{ticker}</small> {d['flags']}</b>
                 <div style="text-align: right;">
-                    <b style="color:{text_color}; font-size: 19px;">{d['pct']:+.2f}%</b>
-                    <div style="font-size: 13px; color: #111;">${d['price']}</div>
+                    <b style="color:{text_color}; font-size: 20px;">{d['pct']:+.2f}%</b>
+                    <div style="font-size: 14px; color: #111; font-weight:bold;">${d['price']}</div>
                 </div>
             </div>
             
-            <div style="padding: 12px; background: #fff;">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px; border-bottom: 1px solid #f0f0f0; padding-bottom: 10px; margin-bottom: 10px;">
-                    <div>• 상승여력: <b style="color:{d['u_color']};">{d['upside']}</b></div>
-                    <div>• 52주 저점 대비: <b>{d['dist_low']}</b></div>
-                    <div>• PER: <b>{d['per']}배</b> / 배당: <b>{d['div']}</b></div>
-                    <div>• 투자의견: <b style="color:#d93025;">{d['opinion']}</b></div>
-                </div>
-                <ul style="margin: 0; padding-left: 18px;">{news}</ul>
+            <div style="padding: 15px; background: #fff;">
+                <table style="width: 100%; font-size: 13px; border-collapse: collapse; margin-bottom: 12px;">
+                    <tr>
+                        <td style="padding: 5px 0;">• 상승여력: <b style="color:{d['u_color']};">{d['upside']}</b></td>
+                        <td style="padding: 5px 0;">• 저점대비: <b style="color:{d['l_color']};">{d['dist_low']}</b></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 5px 0;">• PER: <b style="color:{d['p_color']};">{d['per']}배</b></td>
+                        <td style="padding: 5px 0;">• 배당률: <b style="color:{d['d_color']};">{d['div']}</b></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 5px 0;">• 의견: <b style="color:#111;">{d['opinion']}</b></td>
+                        <td style="padding: 5px 0;">• 시총: <b>{d['cap']}</b></td>
+                    </tr>
+                </table>
+                <ul style="margin: 0; padding-left: 18px; border-top: 1px solid #f5f5f5; padding-top: 10px;">{news}</ul>
             </div>
         </div>
         """
@@ -147,7 +164,7 @@ if __name__ == "__main__":
     html += "</div></body></html>"
 
     msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"[{datetime.now().strftime('%m/%d')}] 🏛️ 형님! 바닥권 종목 포함 VIP 리포트입니다."
+    msg['Subject'] = f"[{datetime.now().strftime('%m/%d')}] 🏛️ 형님! 판단 지표 완벽 정립된 VIP 리포트입니다."
     msg['From'], msg['To'] = EMAIL_ADDRESS, EMAIL_ADDRESS
     msg.attach(MIMEText(html, "html"))
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
