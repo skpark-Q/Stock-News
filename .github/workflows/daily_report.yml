@@ -1,9 +1,10 @@
-name: Daily Stock High-Speed Report
+name: Daily Stock Strategy Report
 
 on:
   schedule:
-    - cron: '23 21 * * *' # 매일 아침 06:23 (KST)
-  workflow_dispatch:
+    # 한국 시간(KST) 오전 09:36 실행 (UTC 00:36)
+    - cron: '36 0 * * *'
+  workflow_dispatch: # 필요할 때 언제든 수동 실행 가능!
 
 jobs:
   build:
@@ -19,9 +20,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # 🚀 AI 빼고 필요한 핵심 부품만 설치!
+          # 🚀 필요한 모든 부품을 설치합니다.
           pip install yfinance beautifulsoup4 lxml requests
-          
+
       - name: Run Script
         env:
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
