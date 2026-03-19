@@ -2,7 +2,7 @@
 ================================================================================
 [ 🏛️ VIP 주식 전략 리포트 - 통합 설계 변경 이력 (Design Change History) ]
 ================================================================================
-최종 수정일: 2026-03-19 | 현재 버전: v3.6
+최종 수정일: 2026-03-19 | 현재 버전: v3.8
 --------------------------------------------------------------------------------
 날짜        | 버전         | 설계 변경 및 업데이트 내역
 --------------------------------------------------------------------------------
@@ -11,15 +11,13 @@
 2026-02-12 | v1.2         | 노이즈 필터링 및 16대 우량주 자동 매핑 구현
 2026-02-13 | v1.3         | 주가 변동 연동 헤더 음영 UI 및 깃발(Flag) 시스템 도입
 2026-02-15 | v2.0         | 기본적 분석 지표(PER, 배당률, 목표가 여력) 로직 추가
-2026-02-20 | v2.1         | 배당률 계산 정밀화 및 투자의견 한글화 매핑 (v1.0, v2.1)
+2026-02-20 | v2.1         | 배당률 계산 정밀화 및 투자의견 한글화 매핑
 2026-03-05 | v2.2         | 다중 수신인 발송 및 평일(월~금) 스케줄링 적용
 2026-03-17 | v3.0         | when:1d 필터 및 사회/경제 헤드라인 섹션 추가
 2026-03-18 | v3.1         | 사회/경제(4:3) 정밀 믹싱 로직 적용
-2026-03-19 | v3.2         | 불필요 태그([속보] 등) 제거 로직 적용
-2026-03-19 | v3.3         | 국내/국제 섹션 분리(7개씩), 출처 표기 제거 적용
-2026-03-19 | v3.4         | 경제 기사 지분 고정 및 키워드 기반 중복 차단 시도
-2026-03-19 | v3.5         | 교집합 연산을 통한 초정밀 중복 필터 및 금지어 강화
-2026-03-19 | v3.6         | [최신] 투자 지표 가이드 내 VIX 기준 추가 및 뉴스 수집 예외 처리 강화
+2026-03-19 | v3.2~3.5    | 태그 제거, 섹션 분리, 초정밀 중복 필터 및 금지어 강화
+2026-03-19 | v3.6~3.7    | VIX 가이드 추가 및 국제 섹션 한국 소식 제외 로직 적용
+2026-03-19 | v3.8         | [최신] 국내 지분 고정 해제(상위 7개), 국제 섹션 '미국 사회/정치' 타겟팅 변경
 ================================================================================
 """
 
@@ -30,25 +28,23 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
-# [1. 환경 변수 및 수신인 설정] --------------------------------------------------
+# [1. 환경 변수 및 수신인 설정]
 EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 
 RECIPIENTS = [
-    EMAIL_ADDRESS,           # 형님 본인
-    "yhkwon@spigen.com",     # 파트너 1
-    "jynoh@spigen.com",      # 파트너 2
-    "mako@spigen.com",       # 파트너 3
-    "jhkang@spigen.com"      # 파트너 4
+    EMAIL_ADDRESS
 ]
 
-# [2. 분석 대상 종목 데이터베이스] ------------------------------------------------
 STOCK_MAP = {
     "애플": "AAPL", "마이크로소프트": "MSFT", "엔비디아": "NVDA", "알파벳": "GOOGL",
     "아마존": "AMZN", "메타": "META", "테슬라": "TSLA", "브로드컴": "AVGO",
     "일라이 릴리": "LLY", "비자": "V", "존슨앤존슨": "JNJ", "오라클": "ORCL",
     "버크셔 해서웨이": "BRK-B", "팔란티어": "PLTR", "월마트": "WMT", "코스트코": "COST"
 }
+
+# 글로벌 중복 체크용 변수 (v3.7 도입)
+GLOBAL_SEEN_WORD_SETS = []
 
 def get_market_summary():
     """상단 시장 지수 정보 수집 (v1.3, v2.0)"""
@@ -108,14 +104,14 @@ def get_stock_details(ticker):
     except: return None
 
 def clean_news_title(title):
-    """제목 정제 (v3.3) - 출처 제거 및 불필요 태그 박멸"""
+    """제목 정제 (v3.3, v3.7) - 출처 제거 및 불필요 태그 박멸"""
     if " - " in title:
         title = title.rsplit(" - ", 1)[0]
-    title = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]|\[단독\]|\[리포트\]', '', title).strip()
+    title = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]|\[단독\]|\[리포트\]|\[이 시각.*?\]', '', title).strip()
     return title
 
 def fetch_korean_news(brand):
-    """종목 뉴스 수집 (v1.1, v3.0, v3.3)"""
+    """종목 뉴스 수집 (v1.1, v3.0, v3.3, v3.7)"""
     query = urllib.parse.quote(f"{brand} 주식 (마감 OR 종가) when:1d")
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
     try:
@@ -133,15 +129,15 @@ def fetch_korean_news(brand):
 
 def fetch_categorized_headlines(queries_with_counts):
     """
-    [2026-03-19 v3.5, v3.6] 교집합 연산을 통한 중복 필터 및 수집 안정화 로직
+    [2026-03-19 v3.8] 국내/국제 뉴스 수집 및 중복 필터링 통합 로직
     """
-    black_list = ["책 소개", "도서", "신간", "출판", "오늘의 뉴스", "데일리 뉴스", "일정", "가이드", "조간", "브리핑"]
+    black_list = ["책 소개", "도서", "신간", "출판", "오늘의 뉴스", "데일리 뉴스", "일정", "가이드", "조간", "브리핑", "헤드라인", "뉴스룸", "뉴스데스크", "뉴스 9"]
     found_html = []
-    seen_word_sets = []
 
     for sub_query, count in queries_with_counts.items():
-        q = urllib.parse.quote(f"{sub_query} when:1d")
-        u = f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+        q_text = f"{sub_query} when:1d"
+        q_encoded = urllib.parse.quote(q_text)
+        u = f"https://news.google.com/rss/search?q={q_encoded}&hl=ko&gl=KR&ceid=KR:ko"
         
         try:
             r = requests.get(u, timeout=5)
@@ -152,35 +148,37 @@ def fetch_categorized_headlines(queries_with_counts):
                 if any(word in title for word in black_list): continue
                 if bool(re.search('[가-힣]', title)):
                     clean_t = clean_news_title(title)
+                    
+                    # 지능형 중복 체크 (v3.5 로직)
                     current_words = set(re.findall(r'[가-힣]{2,}', clean_t))
                     if not current_words: continue
                     
                     is_duplicate = False
-                    for seen_set in seen_word_sets:
+                    for seen_set in GLOBAL_SEEN_WORD_SETS:
                         intersect = current_words & seen_set
                         if len(intersect) >= 2 or (len(intersect) / len(current_words)) >= 0.4:
                             is_duplicate = True
                             break
                     if is_duplicate: continue
                     
-                    seen_word_sets.append(current_words)
+                    GLOBAL_SEEN_WORD_SETS.append(current_words)
                     found_html.append(f"<li style='margin-bottom:6px;'><a href='{item.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
                     items_collected += 1
                 if items_collected >= count: break
         except: pass
     
-    # [2026-03-19 v3.6] 수집 결과가 아예 없을 경우 예외 처리
-    return "".join(found_html[:7]) if found_html else "<li>오늘의 주요 뉴스가 없습니다.</li>"
+    return "".join(found_html[:7]) if found_html else "<li>주요 뉴스가 없습니다.</li>"
 
 if __name__ == "__main__":
-    print("🚀 VIP 리포트 생성 프로세스 가동... (v3.6 VIX 가이드 보강 버전)")
+    print("🚀 VIP 리포트 v3.8 엔진 가동... (전면 개편 버전)")
     m_context = get_market_summary()
     
-    # 국내: 경제 4 + 사회 3 지분 고정
-    domestic_html = fetch_categorized_headlines({"경제 주요 분석": 4, "사회 핵심 소식": 3})
+    # 🇰🇷 [v3.8] 국내: 지분 고정 없이 상위 7개 (중복 제거 적용)
+    # 중복 필터 통과를 고려해 검색 개수를 15개로 넉넉히 잡습니다.
+    domestic_html = fetch_categorized_headlines({"국내 주요 뉴스 경제 사회": 15})
     
-    # 국제: [v3.6] 검색 범위를 조금 더 넓혀서 수집 안정성 확보
-    intl_html = fetch_categorized_headlines({"국제 정세 세계 뉴스": 7})
+    # 🌎 [v3.8] 국제: 미국 사회 및 정치 키워드로 타겟팅
+    intl_html = fetch_categorized_headlines({"미국 사회 정치 뉴스 -코리아 -한국": 15})
     
     mail_date = datetime.now().strftime('%m/%d')
     html = f"""
@@ -204,7 +202,7 @@ if __name__ == "__main__":
             </div>
 
             <div style="margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
-                <b style="font-size: 15px; color: #111;">🌎 국제/해외 주요 소식 (7)</b>
+                <b style="font-size: 15px; color: #111;">🇺🇸 미국 사회/정치 소식 (7)</b>
                 <ul style="margin: 10px 0 0 0; padding-left: 18px;">{intl_html}</ul>
             </div>
 
@@ -244,5 +242,5 @@ if __name__ == "__main__":
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             s.send_message(msg)
-        print("✅ 발송 완료! (v3.6 가이드 보강 및 수집 안정화)")
+        print("✅ 발송 완료! (v3.8 뉴스 개편 버전)")
     except Exception as e: print(f"❌ 발송 실패: {e}")
