@@ -2,22 +2,15 @@
 ================================================================================
 [ 🏛️ VIP 주식 전략 리포트 - 통합 설계 변경 이력 (Design Change History) ]
 ================================================================================
-최종 수정일: 2026-03-19 | 현재 버전: v3.8
+최종 수정일: 2026-03-19 | 현재 버전: v4.0
 --------------------------------------------------------------------------------
 날짜        | 버전         | 설계 변경 및 업데이트 내역
 --------------------------------------------------------------------------------
-2026-02-10 | v1.0         | 시스템 초기 구축 (AI 번역 기반 뉴스 수집)
-2026-02-11 | v1.1         | AI 의존성 제거 및 BeautifulSoup 기반 크롤링 엔진 도입
-2026-02-12 | v1.2         | 노이즈 필터링 및 16대 우량주 자동 매핑 구현
-2026-02-13 | v1.3         | 주가 변동 연동 헤더 음영 UI 및 깃발(Flag) 시스템 도입
-2026-02-15 | v2.0         | 기본적 분석 지표(PER, 배당률, 목표가 여력) 로직 추가
-2026-02-20 | v2.1         | 배당률 계산 정밀화 및 투자의견 한글화 매핑
-2026-03-05 | v2.2         | 다중 수신인 발송 및 평일(월~금) 스케줄링 적용
-2026-03-17 | v3.0         | when:1d 필터 및 사회/경제 헤드라인 섹션 추가
-2026-03-18 | v3.1         | 사회/경제(4:3) 정밀 믹싱 로직 적용
-2026-03-19 | v3.2~3.5    | 태그 제거, 섹션 분리, 초정밀 중복 필터 및 금지어 강화
-2026-03-19 | v3.6~3.7    | VIX 가이드 추가 및 국제 섹션 한국 소식 제외 로직 적용
-2026-03-19 | v3.8         | [최신] 국내 지분 고정 해제(상위 7개), 국제 섹션 '미국 사회/정치' 타겟팅 변경
+2026-02-10 | v1.0~v1.3   | 초기 구축 및 기초 UI(음영, 깃발) 도입
+2026-02-15 | v2.0~v2.2   | 지표 고도화(PER, 배당), 수신인 확장 및 스케줄링
+2026-03-17 | v3.0~v3.5   | 뉴스 믹싱, 중복 차단 필터 및 금지어 숙청 로직 강화
+2026-03-19 | v3.6~v3.8   | VIX 가이드 추가 및 국제 섹션 '미국 사회/정치' 타겟팅
+2026-03-19 | v4.0         | [최신] 프리미엄 카드 UI 디자인 및 실시간 펄스 도트 애니메이션 도입
 ================================================================================
 """
 
@@ -43,11 +36,9 @@ STOCK_MAP = {
     "버크셔 해서웨이": "BRK-B", "팔란티어": "PLTR", "월마트": "WMT", "코스트코": "COST"
 }
 
-# 글로벌 중복 체크용 변수 (v3.7 도입)
 GLOBAL_SEEN_WORD_SETS = []
 
 def get_market_summary():
-    """상단 시장 지수 정보 수집 (v1.3, v2.0)"""
     try:
         results = []
         indices = {"나스닥": "^IXIC", "S&P500": "^GSPC", "공포지수(VIX)": "^VIX"}
@@ -59,15 +50,14 @@ def get_market_summary():
             color = "#111"
             if name == "공포지수(VIX)":
                 color = "#1a73e8" if curr < 20 else ("#f9ab00" if curr < 30 else "#d93025")
-                results.append(f"{name}: <b style='color:{color};'>{curr:.2f}</b>")
+                results.append(f"{name}: <span style='color:{color}; font-weight:bold;'>{curr:.2f}</span>")
             else:
                 idx_color = "#d93025" if pct > 0 else "#1a73e8"
-                results.append(f"{name}: <b style='color:{idx_color};'>{pct:+.2f}%</b>")
-        return " | ".join(results)
+                results.append(f"{name}: <span style='color:{idx_color}; font-weight:bold;'>{pct:+.2f}%</span>")
+        return " &nbsp; | &nbsp; ".join(results)
     except: return "시장 데이터 로딩 중..."
 
 def get_stock_details(ticker):
-    """개별 종목 재무 지표 및 투자의견 산출 (v2.0, v2.1)"""
     try:
         s = yf.Ticker(ticker)
         f, info = s.fast_info, s.info
@@ -104,14 +94,11 @@ def get_stock_details(ticker):
     except: return None
 
 def clean_news_title(title):
-    """제목 정제 (v3.3, v3.7) - 출처 제거 및 불필요 태그 박멸"""
-    if " - " in title:
-        title = title.rsplit(" - ", 1)[0]
+    if " - " in title: title = title.rsplit(" - ", 1)[0]
     title = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]|\[단독\]|\[리포트\]|\[이 시각.*?\]', '', title).strip()
     return title
 
 def fetch_korean_news(brand):
-    """종목 뉴스 수집 (v1.1, v3.0, v3.3, v3.7)"""
     query = urllib.parse.quote(f"{brand} 주식 (마감 OR 종가) when:1d")
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
     try:
@@ -122,23 +109,17 @@ def fetch_korean_news(brand):
             title = i.title.text
             if bool(re.search('[가-힣]', title)):
                 clean_t = clean_news_title(title)
-                links.append(f"<li style='margin-bottom:5px;'><a href='{i.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
+                links.append(f"<li style='margin-bottom:6px;'><a href='{i.link.text}' style='color:#444; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
             if len(links) >= 3: break
         return "".join(links)
     except: return "<li>뉴스를 불러오지 못했습니다.</li>"
 
 def fetch_categorized_headlines(queries_with_counts):
-    """
-    [2026-03-19 v3.8] 국내/국제 뉴스 수집 및 중복 필터링 통합 로직
-    """
     black_list = ["책 소개", "도서", "신간", "출판", "오늘의 뉴스", "데일리 뉴스", "일정", "가이드", "조간", "브리핑", "헤드라인", "뉴스룸", "뉴스데스크", "뉴스 9"]
     found_html = []
-
     for sub_query, count in queries_with_counts.items():
-        q_text = f"{sub_query} when:1d"
-        q_encoded = urllib.parse.quote(q_text)
+        q_encoded = urllib.parse.quote(f"{sub_query} when:1d")
         u = f"https://news.google.com/rss/search?q={q_encoded}&hl=ko&gl=KR&ceid=KR:ko"
-        
         try:
             r = requests.get(u, timeout=5)
             s = BeautifulSoup(r.content, "xml")
@@ -148,11 +129,8 @@ def fetch_categorized_headlines(queries_with_counts):
                 if any(word in title for word in black_list): continue
                 if bool(re.search('[가-힣]', title)):
                     clean_t = clean_news_title(title)
-                    
-                    # 지능형 중복 체크 (v3.5 로직)
                     current_words = set(re.findall(r'[가-힣]{2,}', clean_t))
                     if not current_words: continue
-                    
                     is_duplicate = False
                     for seen_set in GLOBAL_SEEN_WORD_SETS:
                         intersect = current_words & seen_set
@@ -160,87 +138,129 @@ def fetch_categorized_headlines(queries_with_counts):
                             is_duplicate = True
                             break
                     if is_duplicate: continue
-                    
                     GLOBAL_SEEN_WORD_SETS.append(current_words)
-                    found_html.append(f"<li style='margin-bottom:6px;'><a href='{item.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
+                    found_html.append(f"<li style='margin-bottom:6px;'><a href='{item.link.text}' style='color:#333; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
                     items_collected += 1
                 if items_collected >= count: break
         except: pass
-    
     return "".join(found_html[:7]) if found_html else "<li>주요 뉴스가 없습니다.</li>"
 
 if __name__ == "__main__":
-    print("🚀 VIP 리포트 v3.8 엔진 가동... (전면 개편 버전)")
+    print("🚀 VIP 리포트 v4.0 프리미엄 엔진 가동...")
     m_context = get_market_summary()
-    
-    # 🇰🇷 [v3.8] 국내: 지분 고정 없이 상위 7개 (중복 제거 적용)
-    # 중복 필터 통과를 고려해 검색 개수를 15개로 넉넉히 잡습니다.
     domestic_html = fetch_categorized_headlines({"국내 주요 뉴스 경제 사회": 15})
-    
-    # 🌎 [v3.8] 국제: 미국 사회 및 정치 키워드로 타겟팅
     intl_html = fetch_categorized_headlines({"미국 사회 정치 뉴스 -코리아 -한국": 15})
     
     mail_date = datetime.now().strftime('%m/%d')
+    
+    # [프리미엄 HTML 템플릿]
     html = f"""
+    <!DOCTYPE html>
     <html>
-    <body style="font-family: 'Malgun Gothic', sans-serif; background-color: #ffffff; padding: 20px;">
-        <div style="max-width: 650px; margin: auto; border: 2px solid #111; padding: 25px; border-radius: 10px;">
-            <h1 style="border-bottom: 4px solid #111; padding-bottom: 10px; margin: 0; text-align: center;">🏛️ VIP 주식 전략 리포트</h1>
+    <head>
+        <style>
+            @keyframes pulse {{
+                0% {{ transform: scale(0.95); box-shadow: 0 0 0 0 rgba(217, 48, 37, 0.7); }}
+                70% {{ transform: scale(1); box-shadow: 0 0 0 6px rgba(217, 48, 37, 0); }}
+                100% {{ transform: scale(0.95); box-shadow: 0 0 0 0 rgba(217, 48, 37, 0); }}
+            }}
+            .dot {{
+                display: inline-block; width: 8px; height: 8px; background-color: #d93025; 
+                border-radius: 50%; margin-right: 5px; animation: pulse 2s infinite; vertical-align: middle;
+            }}
+        </style>
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f6f8fa; padding: 20px; color: #1a1a1a;">
+        <div style="max-width: 650px; margin: auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid #e1e4e8;">
             
-            <div style="background: #f8f9fa; border: 1px solid #ddd; padding: 15px; margin-top: 20px; font-size: 12px; line-height: 1.6;">
-                <b style="font-size: 14px; color: #111;">[📊 투자 지표 컬러 가이드]</b><br>
-                • <b>공포지수(VIX):</b> <span style="color:#1a73e8;">20미만(🔵안정)</span> / <span style="color:#f9ab00;">20~30(🟠주의)</span> / <span style="color:#d93025;">30초과(🔴패닉)</span><br>
-                • <b>상승여력:</b> 전문가 목표가 대비 <span style="color:#1a73e8;">15%↑(🔵기회)</span> / <span style="color:#d93025;">마이너스(🔴위험)</span><br>
-                • <b>저점대비:</b> 52주 저점에서 <span style="color:#1a73e8;">10%이내(🔵바닥)</span> / <span style="color:#d93025;">30%↑(🔴과열)</span><br>
-                • <b>PER:</b> <span style="color:#1a73e8;">25미만(🔵저평가)</span> / <span style="color:#d93025;">40초과(🔴고평가)</span><br>
-                • <b>배당률:</b> <span style="color:#1a73e8;">3%↑(🔵혜자)</span> / <span style="color:#d93025;">1%미만(🔴낮음)</span>
+            <div style="background: #1a1a1a; padding: 30px; text-align: center;">
+                <h1 style="margin: 0; color: #ffffff; font-size: 24px; letter-spacing: -0.5px;">🏛️ VIP 주식 전략 리포트</h1>
+                <p style="color: #888; font-size: 13px; margin-top: 8px; font-weight: 300;">PREMIUM MARKET INTELLIGENCE • {mail_date}</p>
             </div>
 
-            <div style="margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
-                <b style="font-size: 15px; color: #111;">🇰🇷 국내 주요 소식 (7)</b>
-                <ul style="margin: 10px 0 0 0; padding-left: 18px;">{domestic_html}</ul>
-            </div>
+            <div style="padding: 25px;">
+                <div style="background: #ffffff; border: 1px solid #eee; padding: 18px; border-radius: 12px; font-size: 12px; line-height: 1.6; margin-bottom: 25px;">
+                    <b style="font-size: 13px; display: block; margin-bottom: 8px; color: #555;">[📊 투자 지표 컬러 가이드]</b>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        <span>• 공포지수: <span style="color:#1a73e8;">20↓안정</span> / <span style="color:#d93025;">30↑패닉</span></span>
+                        <span>• 상승여력: <span style="color:#1a73e8;">15%↑기회</span> / <span style="color:#d93025;">마이너스</span></span>
+                        <span>• PER: <span style="color:#1a73e8;">25↓저평가</span> / <span style="color:#d93025;">40↑과열</span></span>
+                        <span>• 배당률: <span style="color:#1a73e8;">3%↑혜자</span> / <span style="color:#d93025;">1%↓낮음</span></span>
+                    </div>
+                </div>
 
-            <div style="margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
-                <b style="font-size: 15px; color: #111;">🇺🇸 미국 사회/정치 소식 (7)</b>
-                <ul style="margin: 10px 0 0 0; padding-left: 18px;">{intl_html}</ul>
-            </div>
+                <div style="margin-bottom: 25px;">
+                    <div style="display: inline-block; padding: 4px 12px; background: #f1f3f4; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 12px;">🇰🇷 국내 주요 소식</div>
+                    <ul style="margin: 0; padding-left: 15px; color: #333;">{domestic_html}</ul>
+                </div>
+                
+                <div style="margin-bottom: 30px;">
+                    <div style="display: inline-block; padding: 4px 12px; background: #f1f3f4; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 12px;">🇺🇸 미국 사회/정치</div>
+                    <ul style="margin: 0; padding-left: 15px; color: #333;">{intl_html}</ul>
+                </div>
 
-            <p style="padding: 12px; background: #111; color:#fff; font-size: 14px; margin-top: 15px;"><b>🌍 오늘의 전장 상황:</b> {m_context}</p>
+                <div style="padding: 15px; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #1a1a1a; margin-bottom: 30px;">
+                    <div style="font-size: 13px; margin-bottom: 5px; color: #666; font-weight: bold;">
+                        <span class="dot"></span> CURRENT MARKET STATUS
+                    </div>
+                    <div style="font-size: 15px; letter-spacing: -0.2px;">{m_context}</div>
+                </div>
+
+                <h3 style="font-size: 16px; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 20px;">📦 종목별 정밀 분석</h3>
     """
 
     for brand, ticker in STOCK_MAP.items():
         d = get_stock_details(ticker)
         if not d: continue
         news = fetch_korean_news(brand)
-        header_bg = "#fce8e6" if d['pct'] > 0 else "#e8f0fe"
-        text_color = "#d93025" if d['pct'] > 0 else "#1a73e8"
+        
+        # 주가 움직임에 따른 컬러 설정
+        accent_color = "#d93025" if d['pct'] > 0 else "#1a73e8"
+        bg_light = "#fff5f5" if d['pct'] > 0 else "#f0f7ff"
+
         html += f"""
-        <div style="margin-top: 25px; border: 1px solid #eee; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
-            <div style="background: {header_bg}; padding: 15px; display: flex; justify-content: space-between; align-items: center;">
-                <b style="font-size: 18px; color: #111;">{brand} <small style="color:#666;">{ticker}</small> {d['flags']}</b>
-                <div style="text-align: right;"><b style="color:{text_color}; font-size: 20px;">{d['pct']:+.2f}%</b><div style="font-size: 14px; font-weight:bold;">${d['price']}</div></div>
+        <div style="margin-bottom: 20px; background: #ffffff; border: 1px solid #e1e4e8; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;">
+            <div style="padding: 15px; background: {bg_light}; display: flex; justify-content: space-between; align-items: center; border-left: 5px solid {accent_color};">
+                <div style="font-size: 17px; font-weight: 800; color: #111;">{brand} <span style="font-weight: 400; font-size: 12px; color: #666;">{ticker}</span> {d['flags']}</div>
+                <div style="text-align: right;">
+                    <span style="font-size: 20px; font-weight: 900; color: {accent_color};">{d['pct']:+.2f}%</span>
+                    <div style="font-size: 13px; color: #111; font-weight: bold; margin-top: 2px;">${d['price']}</div>
+                </div>
             </div>
-            <div style="padding: 15px; background: #fff;">
-                <table style="width: 100%; font-size: 13px; border-collapse: collapse; margin-bottom: 12px;">
-                    <tr><td>상승여력: <b style="color:{d['u_color']};">{d['upside']}</b></td><td>저점대비: <b style="color:{d['l_color']};">{d['dist_low']}</b></td></tr>
-                    <tr><td>PER: <b style="color:{d['p_color']};">{d['per']}배</b></td><td>배당률: <b style="color:{d['d_color']};">{d['div']}</b></td></tr>
-                    <tr><td>투자의견: <b>{d['opinion']}</b></td><td>시가총액: <b>{d['cap']}</b></td></tr>
-                </table>
-                <ul style="margin: 0; padding-left: 18px; border-top: 1px solid #f5f5f5; padding-top: 10px;">{news}</ul>
+            <div style="padding: 15px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-bottom: 12px; background: #fafafa; padding: 10px; border-radius: 8px;">
+                    <div>상승여력: <b style="color:{d['u_color']};">{d['upside']}</b></div>
+                    <div>저점대비: <b style="color:{d['l_color']};">{d['dist_low']}</b></div>
+                    <div>PER: <b style="color:{d['p_color']};">{d['per']}배</b></div>
+                    <div>배당률: <b style="color:{d['d_color']};">{d['div']}</b></div>
+                    <div style="grid-column: span 2; border-top: 1px solid #eee; padding-top: 5px; margin-top: 5px;">
+                        투자의견: <b>{d['opinion']}</b> &nbsp; | &nbsp; 시총: <b>{d['cap']}</b>
+                    </div>
+                </div>
+                <ul style="margin: 0; padding-left: 15px; border-top: 1px solid #f1f1f1; padding-top: 12px;">{news}</ul>
             </div>
         </div>
         """
         time.sleep(0.5)
 
-    html += "</div></body></html>"
+    html += """
+                <div style="text-align: center; margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px;">
+                    <p style="font-size: 11px; color: #999;">본 리포트는 SPIGEN VIP 전용 데이터 모델(v4.0)로 생성되었습니다.<br>데이터 제공: Yahoo Finance / Google News</p>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
     msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"[{mail_date}] 🏛️ 데일리 뉴스 리포트 ✨"
+    msg['Subject'] = f"[{mail_date}] 🏛️ 데일리 뉴스 프리미엄 리포트 ✨"
     msg['From'], msg['To'] = EMAIL_ADDRESS, ", ".join(RECIPIENTS)
     msg.attach(MIMEText(html, "html"))
+    
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             s.send_message(msg)
-        print("✅ 발송 완료! (v3.8 뉴스 개편 버전)")
+        print("✅ 발송 완료! (v4.0 프리미엄 디자인 버전)")
     except Exception as e: print(f"❌ 발송 실패: {e}")
