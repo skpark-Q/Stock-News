@@ -26,7 +26,11 @@ EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 
 RECIPIENTS = [
-    EMAIL_ADDRESS
+    EMAIL_ADDRESS,
+    "yhkwon@spigen.com",
+    "jynoh@spigen.com",
+    "mako@spigen.com",
+    "jhkang@spigen.com"
 ]
 
 STOCK_MAP = {
