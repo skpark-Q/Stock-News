@@ -2,7 +2,7 @@
 ================================================================================
 [ 🏛️ VIP 주식 전략 리포트 - 통합 설계 변경 이력 (Design Change History) ]
 ================================================================================
-최종 수정일: 2026-03-19 | 현재 버전: v3.2
+최종 수정일: 2026-03-19 | 현재 버전: v3.3
 --------------------------------------------------------------------------------
 날짜        | 버전         | 설계 변경 및 업데이트 내역
 --------------------------------------------------------------------------------
@@ -15,7 +15,8 @@
 2026-03-05 | v2.2         | 다중 수신인 발송 및 평일(월~금) 스케줄링 워크플로우 적용
 2026-03-17 | v3.0         | when:1d 최신성 필터 및 사회/경제 헤드라인 섹션 추가
 2026-03-18 | v3.1         | 헤드라인 중복 제거 및 사회/경제(4:3) 정밀 믹싱 로직 적용
-2026-03-19 | v3.2         | [최신] 헤드라인 중복 필터 고도화 및 '[속보]' 등 불필요 태그 제거 로직 적용
+2026-03-19 | v3.2         | 헤드라인 중복 필터 고도화 및 불필요 태그 제거 적용
+2026-03-19 | v3.3         | [최신] 국내/국제 섹션 분리(7개씩), 출처 표기 제거, 요약성 기사 필터링 적용
 ================================================================================
 """
 
@@ -103,9 +104,22 @@ def get_stock_details(ticker):
         }
     except: return None
 
+def clean_news_title(title):
+    """
+    [2026-03-19 v3.3] 뉴스 제목 정제 함수
+    1. 출처(언론사명) 제거 (보통 ' - 언론사' 형식)
+    2. [속보], [종합] 등 불필요한 태그 박멸
+    """
+    # 출처 제거 (뒤에서부터 ' - ' 를 찾아 그 앞부분만 취함)
+    if " - " in title:
+        title = title.rsplit(" - ", 1)[0]
+    # 불필요 태그 제거
+    title = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]|\[단독\]|\[리포트\]', '', title).strip()
+    return title
+
 def fetch_korean_news(brand):
-    """종목별 당일 핵심 뉴스 수집 (v1.1, v3.0)"""
-    query = urllib.parse.quote(f"{brand} 주식 (마감 OR 종가 OR 속보) when:1d")
+    """종목별 당일 핵심 뉴스 수집 (v1.1, v3.0, v3.3)"""
+    query = urllib.parse.quote(f"{brand} 주식 (마감 OR 종가) when:1d")
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
     try:
         res = requests.get(url, timeout=5)
@@ -114,59 +128,50 @@ def fetch_korean_news(brand):
         for i in soup.find_all("item"):
             title = i.title.text
             if bool(re.search('[가-힣]', title)):
-                # 종목 뉴스에서도 [속보] 태그 제거 로직 적용 (v3.2)
-                clean_title = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]', '', title).strip()
-                links.append(f"<li style='margin-bottom:5px;'><a href='{i.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_title}</a></li>")
+                clean_t = clean_news_title(title)
+                links.append(f"<li style='margin-bottom:5px;'><a href='{i.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
             if len(links) >= 3: break
         return "".join(links)
     except: return "<li>뉴스를 불러오지 못했습니다.</li>"
 
-def fetch_general_headlines():
+def fetch_categorized_headlines(category_query):
     """
-    사회 및 경제 헤드라인 수집 (v3.0, v3.1, v3.2)
-    [2026-03-19 v3.2]: '[속보]' 등 태그 제거 및 텍스트 유사도 기반 중복 제거 로직 강화
+    [2026-03-19 v3.3] 특정 카테고리의 헤드라인을 수집 및 정제합니다.
+    요약성 기사(오늘의 뉴스, 일정 등)를 필터링합니다.
     """
-    def get_news_from_query(sub_query, count):
-        q = urllib.parse.quote(f"{sub_query} when:1d")
-        u = f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
-        found = []
-        try:
-            r = requests.get(u, timeout=5)
-            s = BeautifulSoup(r.content, "xml")
-            for item in s.find_all("item"):
-                title = item.title.text
-                if bool(re.search('[가-힣]', title)):
-                    # [2026-03-19 v3.2] 불필요한 태그 제거 처리
-                    clean_t = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]', '', title).strip()
-                    found.append({"title": clean_t, "link": item.link.text})
-                if len(found) >= count: break
-        except: pass
-        return found
-
-    # 사회 6개, 경제 6개 넉넉히 수집 (중복 제거 후 4:3 믹스를 위해)
-    society_news = get_news_from_query("사회 주요 뉴스", 6)
-    economy_news = get_news_from_query("경제 주요 뉴스", 6)
-
-    combined = []
-    seen_keywords = set() # 유사도 체크용 키워드 셋
-
-    for item in (society_news + economy_news):
-        title = item['title']
-        # [2026-03-19 v3.2] 제목의 앞 12글자를 추출하여 유사도 판단 (내용 중복 방지)
-        content_key = re.sub(r'[^가-힣0-9]', '', title)[:12]
-        
-        if content_key not in seen_keywords:
-            combined.append(f"<li style='margin-bottom:6px;'><a href='{item['link']}' style='color:#111; text-decoration:none; font-size:13px;'>• {title}</a></li>")
-            seen_keywords.add(content_key)
-        
-        if len(combined) >= 7: break
-
-    return "".join(combined)
+    # [2026-03-19 v3.3] 요약성 기사 제외를 위한 블랙리스트 키워드
+    black_list = ["오늘의 뉴스", "데일리 뉴스", "주요 일정", "일정 정리", "조간 브리핑", "뉴스 7", "뉴스 9", "카드뉴스"]
+    
+    q = urllib.parse.quote(f"{category_query} when:1d")
+    u = f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+    found = []
+    seen_keys = set()
+    
+    try:
+        r = requests.get(u, timeout=5)
+        s = BeautifulSoup(r.content, "xml")
+        for item in s.find_all("item"):
+            title = item.title.text
+            # 블랙리스트 필터링
+            if any(word in title for word in black_list): continue
+            if bool(re.search('[가-힣]', title)):
+                clean_t = clean_news_title(title)
+                # 유사도 중복 제거 (v3.2 로직)
+                content_key = re.sub(r'[^가-힣0-9]', '', clean_t)[:12]
+                if content_key not in seen_keys:
+                    found.append(f"<li style='margin-bottom:6px;'><a href='{item.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
+                    seen_keys.add(content_key)
+            if len(found) >= 7: break
+    except: pass
+    return "".join(found)
 
 if __name__ == "__main__":
-    print("🚀 VIP 리포트 생성 중... (v3.2 헤드라인 정제 버전)")
+    print("🚀 VIP 리포트 생성 중... (v3.3 국내/국제 분리 및 제목 정제 버전)")
     m_context = get_market_summary()
-    headlines_html = fetch_general_headlines()
+    
+    # [2026-03-19 v3.3] 국내(사회/경제) 및 국제 뉴스 각각 7개 수집
+    domestic_html = fetch_categorized_headlines("사회 경제 주요 뉴스 -일정 -오늘의")
+    international_html = fetch_categorized_headlines("국제 세계 해외 정세 -일정 -오늘의")
     
     html = f"""
     <html>
@@ -183,8 +188,13 @@ if __name__ == "__main__":
             </div>
 
             <div style="margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
-                <b style="font-size: 15px; color: #111;">📰 사회/경제 주요 헤드라인 (7)</b>
-                <ul style="margin: 10px 0 0 0; padding-left: 18px;">{headlines_html}</ul>
+                <b style="font-size: 15px; color: #111;">🇰🇷 국내 주요 소식 (7)</b>
+                <ul style="margin: 10px 0 0 0; padding-left: 18px;">{domestic_html}</ul>
+            </div>
+
+            <div style="margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
+                <b style="font-size: 15px; color: #111;">🌎 국제/해외 주요 소식 (7)</b>
+                <ul style="margin: 10px 0 0 0; padding-left: 18px;">{international_html}</ul>
             </div>
 
             <p style="padding: 12px; background: #111; color:#fff; font-size: 14px; margin-top: 15px;"><b>🌍 오늘의 전장 상황:</b> {m_context}</p>
@@ -218,10 +228,15 @@ if __name__ == "__main__":
         time.sleep(0.5)
 
     html += "</div></body></html>"
+    
+    # [2026-03-19 v3.3] 메일 제목 변경: [날짜] 데일리 뉴스 리포트 ✨
+    mail_date = datetime.now().strftime('%m/%d')
     msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"[{datetime.now().strftime('%m/%d')}] 🏛️ 형님! 헤드라인 정제 완료된 전략 리포트입니다!"
-    msg['From'], msg['To'] = EMAIL_ADDRESS, ", ".join(RECIPIENTS)
+    msg['Subject'] = f"[{mail_date}] 🏛️ 데일리 뉴스 리포트 ✨"
+    msg['From'] = EMAIL_ADDRESS
+    msg['To'] = ", ".join(RECIPIENTS)
     msg.attach(MIMEText(html, "html"))
+    
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
