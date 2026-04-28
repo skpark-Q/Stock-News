@@ -2,16 +2,16 @@
 ================================================================================
 [ 🏛️ VIP 주식 전략 리포트 - 통합 설계 변경 이력 (Design Change History) ]
 ================================================================================
-최종 수정일: 2026-03-20 | 현재 버전: v4.1
+최종 수정일: 2026-03-21 | 현재 버전: v4.2
 --------------------------------------------------------------------------------
 날짜        | 버전         | 설계 변경 및 업데이트 내역
 --------------------------------------------------------------------------------
-2026-02-10 | v1.0~v1.3   | 초기 구축 및 기초 UI(음영, 깃발) 도입
+2026-02-10 | v1.0~v1.3   | 초기 시스템 구축 및 기초 UI(음영, 깃발) 도입
 2026-02-15 | v2.0~v2.2   | 지표 고도화(PER, 배당), 수신인 확장 및 스케줄링
 2026-03-17 | v3.0~v3.5   | 뉴스 믹싱, 중복 차단 필터 및 금지어 숙청 로직 강화
 2026-03-19 | v3.6~v3.8   | VIX 가이드 추가 및 국제 섹션 '미국 사회/정치' 타겟팅
-2026-03-19 | v4.0         | 프리미엄 카드 UI 디자인 및 실시간 펄스 도트 애니메이션 도입
-2026-03-20 | v4.1         | [최신] 지수 포맷 변경(현재가+변동률), 배당률 계산 수정 및 가이드 복구
+2026-03-20 | v4.0~v4.1   | 프리미엄 카드 UI, 펄스 애니메이션, 지수 포맷 및 배당률 수정
+2026-03-21 | v4.2         | [최신] 국내/미국 6대 메이저 언론사 헤드라인 30개 직송 및 범종목 뉴스 중복 차단
 ================================================================================
 """
 
@@ -41,13 +41,11 @@ STOCK_MAP = {
     "버크셔 해서웨이": "BRK-B", "팔란티어": "PLTR", "월마트": "WMT", "코스트코": "COST"
 }
 
-GLOBAL_SEEN_WORD_SETS = []
+# 🌐 [v4.2 글로벌 관리 변수] 리포트 전체의 뉴스 중복을 관리합니다.
+GLOBAL_SEEN_LINKS = set()
 
 def get_market_summary():
-    """
-    [2026-03-20 v4.1] 형님 요청: 지수 표기 방식 변경
-    포맷: 나스닥 16,000.00 (+1.50%)
-    """
+    """지수 표기 포맷: 나스닥 16,000.00 (+1.50%) (v4.1 유지)"""
     try:
         results = []
         indices = {"나스닥": "^IXIC", "S&P500": "^GSPC", "공포지수(VIX)": "^VIX"}
@@ -56,50 +54,37 @@ def get_market_summary():
             f = s.fast_info
             curr = f['last_price']
             pct = ((curr - f['previous_close']) / f['previous_close']) * 100
-            
             color = "#111"
             if name == "공포지수(VIX)":
                 color = "#1a73e8" if curr < 20 else ("#f9ab00" if curr < 30 else "#d93025")
                 results.append(f"{name}: <span style='color:{color}; font-weight:bold;'>{curr:.2f}</span>")
             else:
                 idx_color = "#d93025" if pct > 0 else "#1a73e8"
-                # 형님 요청 포맷: 지수(변동률)
                 results.append(f"{name}: <span style='color:{idx_color}; font-weight:bold;'>{curr:,.2f} ({pct:+.2f}%)</span>")
         return " &nbsp; | &nbsp; ".join(results)
     except: return "시장 데이터 로딩 중..."
 
 def get_stock_details(ticker):
-    """[2026-03-20 v4.1] 배당률 계산 로직 정밀 수정"""
+    """배당률 및 지표 산출 로직 (v4.1 정교화 버전 유지)"""
     try:
         s = yf.Ticker(ticker)
         f, info = s.fast_info, s.info
         curr, prev = f['last_price'], f['previous_close']
         pct = ((curr - prev) / prev) * 100
-        
         target = info.get('targetMeanPrice', 0)
         upside_val = ((target / curr) - 1) * 100 if target > 0 else 0
         u_color = "#1a73e8" if upside_val > 15 else ("#d93025" if upside_val < 0 else "#111")
-        
         per = info.get('trailingPE', 0)
         p_color = "#1a73e8" if (isinstance(per, (int, float)) and per < 25) else ("#d93025" if (isinstance(per, (int, float)) and per > 40) else "#f9ab00")
         
-        # 🔥 배당률 계산 수정: dividendYield가 0.015(1.5%)처럼 소수로 들어오는 것을 기본으로 함
         div = info.get('dividendYield')
-        if div is None or div == 0: 
-            div_val = 0.0
-        else:
-            # yfinance 특성상 1.0(100%)을 넘는 배당률은 우량주에서 불가능하므로, 
-            # 1보다 크면 이미 %단위로 들어온 것으로 판단하여 처리
-            div_val = div if div > 1 else div * 100
-            
+        div_val = (div if div and div > 1 else (div or 0) * 100)
         d_color = "#1a73e8" if div_val >= 3 else ("#f9ab00" if div_val >= 1 else "#d93025")
         
         dist_low = ((curr / f['year_low']) - 1) * 100
         l_color = "#1a73e8" if dist_low < 10 else ("#d93025" if dist_low > 30 else "#111")
-        
         opinion_map = {'strong_buy': '강력 매수', 'buy': '매수', 'hold': '보유(중립)', 'underperform': '수익률 하회', 'sell': '매도'}
         kor_opinion = opinion_map.get(info.get('recommendationKey', '').lower(), '의견 없음')
-        
         flags = []
         if abs(pct) >= 3.5: flags.append("⚠️")
         if curr >= (f['year_high'] * 0.98): flags.append("✨")
@@ -107,7 +92,6 @@ def get_stock_details(ticker):
             if not s.calendar.empty:
                 if 0 <= (s.calendar.iloc[0, 0] - datetime.now().date()).days <= 7: flags.append("🚩")
         except: pass
-        
         return {
             "price": f"{curr:,.2f}", "pct": round(pct, 2), "flags": "".join(flags),
             "upside": f"{upside_val:+.1f}%", "u_color": u_color,
@@ -120,62 +104,67 @@ def get_stock_details(ticker):
     except: return None
 
 def clean_news_title(title):
+    """제목 정제 (v3.3, v3.7)"""
     if " - " in title: title = title.rsplit(" - ", 1)[0]
     title = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]|\[단독\]|\[리포트\]|\[이 시각.*?\]', '', title).strip()
     return title
 
-def fetch_korean_news(brand):
-    query = urllib.parse.quote(f"{brand} 주식 (마감 OR 종가) when:1d")
+def fetch_outlet_news(outlet_name, site_query, search_keyword, count):
+    """[v4.2] 특정 언론사(Site)의 특정 키워드 뉴스를 수집합니다."""
+    query = urllib.parse.quote(f"site:{site_query} {search_keyword} when:1d")
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
+    html_items = []
     try:
         res = requests.get(url, timeout=5)
         soup = BeautifulSoup(res.content, "xml")
-        links = []
         for i in soup.find_all("item"):
-            title = i.title.text
+            link = i.link.text
+            if link in GLOBAL_SEEN_LINKS: continue
+            title = clean_news_title(i.title.text)
             if bool(re.search('[가-힣]', title)):
-                clean_t = clean_news_title(title)
-                links.append(f"<li style='margin-bottom:6px;'><a href='{i.link.text}' style='color:#444; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
+                html_items.append(f"<li style='margin-bottom:4px; font-size:12px;'><a href='{link}' style='color:#333; text-decoration:none;'>• {title}</a></li>")
+                GLOBAL_SEEN_LINKS.add(link)
+            if len(html_items) >= count: break
+    except: pass
+    
+    if not html_items: return ""
+    return f"""<div style='margin-bottom:12px;'><b style='font-size:13px; color:#555;'>[{outlet_name}]</b><ul style='margin:4px 0; padding-left:15px;'>{"".join(html_items)}</ul></div>"""
+
+def fetch_korean_news_de_dupe(brand):
+    """[v4.2] 종목별 뉴스 수집 (범종목 중복 차단 적용)"""
+    query = urllib.parse.quote(f"{brand} 주식 (마감 OR 종가) when:1d")
+    url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
+    links = []
+    try:
+        res = requests.get(url, timeout=5)
+        soup = BeautifulSoup(res.content, "xml")
+        for i in soup.find_all("item"):
+            link = i.link.text
+            if link in GLOBAL_SEEN_LINKS: continue # 이미 다른 종목에서 나온 기사면 패스
+            title = clean_news_title(i.title.text)
+            if bool(re.search('[가-힣]', title)):
+                links.append(f"<li style='margin-bottom:6px;'><a href='{link}' style='color:#444; text-decoration:none; font-size:13px;'>• {title}</a></li>")
+                GLOBAL_SEEN_LINKS.add(link)
             if len(links) >= 3: break
         return "".join(links)
     except: return "<li>뉴스를 불러오지 못했습니다.</li>"
 
-def fetch_categorized_headlines(queries_with_counts):
-    black_list = ["책 소개", "도서", "신간", "출판", "오늘의 뉴스", "데일리 뉴스", "일정", "가이드", "조간", "브리핑", "헤드라인", "뉴스룸", "뉴스데스크", "뉴스 9"]
-    found_html = []
-    for sub_query, count in queries_with_counts.items():
-        q_encoded = urllib.parse.quote(f"{sub_query} when:1d")
-        u = f"https://news.google.com/rss/search?q={q_encoded}&hl=ko&gl=KR&ceid=KR:ko"
-        try:
-            r = requests.get(u, timeout=5)
-            s = BeautifulSoup(r.content, "xml")
-            items_collected = 0
-            for item in s.find_all("item"):
-                title = item.title.text
-                if any(word in title for word in black_list): continue
-                if bool(re.search('[가-힣]', title)):
-                    clean_t = clean_news_title(title)
-                    current_words = set(re.findall(r'[가-힣]{2,}', clean_t))
-                    if not current_words: continue
-                    is_duplicate = False
-                    for seen_set in GLOBAL_SEEN_WORD_SETS:
-                        intersect = current_words & seen_set
-                        if len(intersect) >= 2 or (len(intersect) / len(current_words)) >= 0.4:
-                            is_duplicate = True
-                            break
-                    if is_duplicate: continue
-                    GLOBAL_SEEN_WORD_SETS.append(current_words)
-                    found_html.append(f"<li style='margin-bottom:6px;'><a href='{item.link.text}' style='color:#333; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
-                    items_collected += 1
-                if items_collected >= count: break
-        except: pass
-    return "".join(found_html[:7]) if found_html else "<li>주요 뉴스가 없습니다.</li>"
-
 if __name__ == "__main__":
-    print("🚀 VIP 리포트 v4.1 프리미엄 엔진 가동...")
+    print("🚀 VIP 리포트 v4.2 프리미엄 엔진 가동...")
     m_context = get_market_summary()
-    domestic_html = fetch_categorized_headlines({"국내 주요 뉴스 경제 사회": 15})
-    intl_html = fetch_categorized_headlines({"미국 사회 정치 뉴스 -코리아 -한국": 15})
+    
+    # 🇰🇷 [v4.2] 국내 메이저 언론사 헤드라인 (3개사 x 5개)
+    domestic_yna = fetch_outlet_news("연합뉴스", "yna.co.kr", "주요 뉴스", 5)
+    domestic_hk = fetch_outlet_news("한국경제", "hankyung.com", "경제 사회", 5)
+    domestic_mk = fetch_outlet_news("매일경제", "mk.co.kr", "경제 사회", 5)
+    domestic_total = domestic_yna + domestic_hk + domestic_mk
+    
+    # 🇺🇸 [v4.2] 미국 메이저 소식 (3개사 x 5개 - 한국 언론의 국제 섹션 활용)
+    intl_yna = fetch_outlet_news("연합 국제", "yna.co.kr", "미국 정치 사회", 5)
+    intl_news1 = fetch_outlet_news("뉴스1 국제", "news1.kr", "미국 정치 사회", 5)
+    intl_newsis = fetch_outlet_news("뉴시스 국제", "newsis.com", "미국 정치 사회", 5)
+    intl_total = intl_yna + intl_news1 + intl_newsis
+    
     mail_date = datetime.now().strftime('%m/%d')
     
     html = f"""
@@ -214,14 +203,14 @@ if __name__ == "__main__":
                     </div>
                 </div>
 
-                <div style="margin-bottom: 25px;">
-                    <div style="display: inline-block; padding: 4px 12px; background: #f1f3f4; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 12px;">🇰🇷 국내 주요 소식</div>
-                    <ul style="margin: 0; padding-left: 15px; color: #333;">{domestic_html}</ul>
+                <div style="margin-bottom: 25px; padding: 15px; border: 1px solid #e1e4e8; border-radius: 12px;">
+                    <div style="display: inline-block; padding: 4px 12px; background: #1a73e8; color:#fff; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 12px;">🇰🇷 국내 메이저 헤드라인</div>
+                    {domestic_total if domestic_total else "<li>데이터를 불러올 수 없습니다.</li>"}
                 </div>
                 
-                <div style="margin-bottom: 30px;">
-                    <div style="display: inline-block; padding: 4px 12px; background: #f1f3f4; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 12px;">🇺🇸 미국 사회/정치</div>
-                    <ul style="margin: 0; padding-left: 15px; color: #333;">{intl_html}</ul>
+                <div style="margin-bottom: 30px; padding: 15px; border: 1px solid #e1e4e8; border-radius: 12px;">
+                    <div style="display: inline-block; padding: 4px 12px; background: #d93025; color:#fff; border-radius: 20px; font-size: 13px; font-weight: bold; margin-bottom: 12px;">🇺🇸 미국 핵심 뉴스</div>
+                    {intl_total if intl_total else "<li>데이터를 불러올 수 없습니다.</li>"}
                 </div>
 
                 <div style="padding: 15px; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #1a1a1a; margin-bottom: 30px;">
@@ -237,7 +226,7 @@ if __name__ == "__main__":
     for brand, ticker in STOCK_MAP.items():
         d = get_stock_details(ticker)
         if not d: continue
-        news = fetch_korean_news(brand)
+        news = fetch_korean_news_de_dupe(brand)
         accent_color = "#d93025" if d['pct'] > 0 else "#1a73e8"
         bg_light = "#fff5f5" if d['pct'] > 0 else "#f0f7ff"
 
@@ -268,13 +257,14 @@ if __name__ == "__main__":
 
     html += """</div></div></body></html>"""
     
+    mail_date_str = datetime.now().strftime('%m/%d')
     msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"[{mail_date}] 🏛️ 데일리 뉴스 프리미엄 리포트 ✨"
+    msg['Subject'] = f"[{mail_date_str}] 🏛️ 데일리 뉴스 프리미엄 리포트 ✨"
     msg['From'], msg['To'] = EMAIL_ADDRESS, ", ".join(RECIPIENTS)
     msg.attach(MIMEText(html, "html"))
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             s.send_message(msg)
-        print("✅ 발송 완료! (v4.1 배당률 및 가이드 복구 완료)")
+        print("✅ 발송 완료! (v4.2 프리미엄 6대 언론사 직송 버전)")
     except Exception as e: print(f"❌ 발송 실패: {e}")
