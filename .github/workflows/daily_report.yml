@@ -3,25 +3,30 @@ name: Daily Stock Strategy Report
 on:
   schedule:
     # 한국 시간(KST) 월~금 오전 09:36 실행 (UTC 00:36)
-    # 1-5는 월요일부터 금요일까지를 의미합니다.
     - cron: '36 0 * * 1-5'
-  workflow_dispatch: # 필요할 때 수동 실행 가능
+  workflow_dispatch: # 수동 실행 버튼
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        # v3에서 v4로 업데이트하여 Node.js 20 경고 해결!
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        # v4에서 v5로 업데이트하여 Node.js 20 경고 해결!
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: |
+          # 🚀 필요한 부품들을 최신으로 설치합니다!
           pip install yfinance beautifulsoup4 lxml requests
+
+      with:
+        # 이 부분은 main.py 실행 환경에 필요한 라이브러리들입니다.
 
       - name: Run Script
         env:
