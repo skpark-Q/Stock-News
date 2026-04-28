@@ -25,7 +25,8 @@ EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 
 RECIPIENTS = [
-    EMAIL_ADDRESS
+    EMAIL_ADDRESS,
+    "mako@spigen.com"
 ]
 
 # [2. 분석 대상 종목 - 인텔, 코카콜라 추가 (v4.5)]
