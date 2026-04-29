@@ -2,15 +2,13 @@
 ================================================================================
 [ 🏛️ VIP 주식 전략 리포트 - 통합 설계 변경 이력 (Design Change History) ]
 ================================================================================
-최종 수정일: 2026-04-28 | 현재 버전: v4.7
+최종 수정일: 2026-04-29 | 현재 버전: v4.8
 --------------------------------------------------------------------------------
 날짜        | 버전         | 설계 변경 및 업데이트 내역
 --------------------------------------------------------------------------------
-2026-02-10 | v1.0~v4.0   | 초기 구축 및 프리미엄 디자인(3단 분할) 도입
-2026-03-20 | v4.1~v4.4   | 배당률 보정, 6대 언론사 직송, 2단 분할 레이아웃
-2026-04-28 | v4.5         | 인텔/코카콜라 추가, 3단 분할(상승/하락), 가격 표기 수정
-2026-04-28 | v4.6         | GitHub Actions Node.js 24 강제 환경 설정 (yml 대응)
-2026-04-28 | v4.7         | [최신] '오늘' 날짜 한정(after:필터), 주식 검색어 영문명 추가로 정밀도 향상
+2026-02-10 | v1.0~v4.4   | 초기 구축, 3단 분할 레이아웃, 메이저 언론사 필터 도입
+2026-04-28 | v4.5~v4.7   | 인텔/코카콜라 추가, 가격 표기 수정, 오늘 날짜 필터 시도
+2026-04-29 | v4.8         | [최신] 뉴스 수집 0건 오류 해결 (Strict Date -> when:1d 롤백 및 정밀 필터)
 ================================================================================
 """
 
@@ -33,7 +31,7 @@ RECIPIENTS = [
     "jhkang@spigen.com"
 ]
 
-# [2. 분석 대상 종목 - 영어 검색어 최적화를 위해 영문명 추가 (v4.7)]
+# [2. 분석 대상 종목]
 STOCK_MAP = {
     "애플": {"ticker": "AAPL", "eng": "Apple"},
     "마이크로소프트": {"ticker": "MSFT", "eng": "Microsoft"},
@@ -57,7 +55,6 @@ STOCK_MAP = {
 
 GLOBAL_SEEN_WORD_SETS = []
 GLOBAL_SEEN_LINKS = set()
-TODAY_STR = datetime.now().strftime('%Y-%m-%d') # 오늘 날짜 (v4.7)
 
 def get_market_summary():
     try:
@@ -97,6 +94,7 @@ def get_stock_details(ticker):
         l_color = "#1a73e8" if dist_low < 10 else ("#d93025" if dist_low > 30 else "#111")
         opinion_map = {'strong_buy': '강력 매수', 'buy': '매수', 'hold': '보유(중립)', 'underperform': '수익률 하회', 'sell': '매도'}
         kor_opinion = opinion_map.get(info.get('recommendationKey', '').lower(), '의견 없음')
+        
         flags = []
         if abs(pct) >= 3.5: flags.append("⚠️")
         if curr >= (f['year_high'] * 0.98): flags.append("✨")
@@ -113,13 +111,14 @@ def get_stock_details(ticker):
 def clean_news_title(title):
     if " - " in title: title = title.rsplit(" - ", 1)[0]
     title = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]|\[단독\]|\[리포트\]|\[이 시각.*?\]|\(.*?\d+일.*?\)', '', title).strip()
+    # ❌ "오늘", "캘린더" 등 형님이 제외 요청하신 키워드들 (v4.5~)
     useless_keywords = ["톱뉴스", "주요공시", "사설", "조간", "석간", "증시 브리핑", "데일리 뉴스", "오늘", "캘린더"]
     if any(kw in title for kw in useless_keywords): return ""
     return title
 
 def is_event_duplicate(clean_t):
     current_words = set(re.findall(r'[가-힣]{2,}', clean_t))
-    if not current_words: return False # 영문 기사 대응 위해 완화
+    if not current_words: return False
     for seen_set in GLOBAL_SEEN_WORD_SETS:
         intersect = current_words & seen_set
         if len(intersect) >= 2: return True
@@ -127,8 +126,8 @@ def is_event_duplicate(clean_t):
     return False
 
 def fetch_outlet_news(outlet_name, site_query, search_keyword, count):
-    # 🔥 [v4.7] 오늘 날짜(after) 필터 적용
-    query = urllib.parse.quote(f"site:{site_query} {search_keyword} after:{TODAY_STR}")
+    # 🔥 [v4.8] when:1d로 변경하여 검색 실패 방지 (안정성 강화)
+    query = urllib.parse.quote(f"site:{site_query} {search_keyword} when:1d")
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
     html_items = []
     try:
@@ -146,8 +145,8 @@ def fetch_outlet_news(outlet_name, site_query, search_keyword, count):
     return f"""<div style='margin-bottom:10px;'><b style='font-size:12px; color:#1a73e8;'>{outlet_name}</b><ul style='margin:4px 0; padding-left:12px;'>{"".join(html_items)}</ul></div>""" if html_items else ""
 
 def fetch_stock_news_de_dupe(kor_brand, eng_name, ticker):
-    # 🔥 [v4.7] 검색어 강화: 한글명 + 영문명 + 티커 + "주가" + 오늘 날짜
-    query_text = f"(\"{kor_brand}\" OR \"{eng_name}\") {ticker} 주가 분석 -코스피 -코스닥 after:{TODAY_STR}"
+    # 🔥 [v4.8] when:1d로 변경하여 누락 방지 및 검색어 최적화 유지
+    query_text = f"(\"{kor_brand}\" OR \"{eng_name}\") {ticker} 주가 분석 -코스피 -코스닥 when:1d"
     query = urllib.parse.quote(query_text)
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
     links = []
@@ -162,11 +161,11 @@ def fetch_stock_news_de_dupe(kor_brand, eng_name, ticker):
             links.append(f"<li style='margin-bottom:5px;'><a href='{link}' style='color:#444; text-decoration:none; font-size:11px;'>• {title}</a></li>")
             GLOBAL_SEEN_LINKS.add(link)
             if len(links) >= 2: break
-        return "".join(links) if links else "<li>오늘의 최신 분석 뉴스가 없습니다.</li>"
+        return "".join(links) if links else "<li>최신 분석 뉴스 없음</li>"
     except: return "<li>뉴스 로딩 실패</li>"
 
 if __name__ == "__main__":
-    print(f"🚀 VIP 리포트 v4.7 가동 중 (기준일: {TODAY_STR})")
+    print("🚀 VIP 리포트 v4.8 뉴스 수집 엔진 긴급 복구 중...")
     m_context = get_market_summary()
     
     domestic_total = fetch_outlet_news("연합뉴스", "yna.co.kr", "주요 뉴스", 4) + \
@@ -178,10 +177,8 @@ if __name__ == "__main__":
                  fetch_outlet_news("뉴시스 국제", "newsis.com", "미국 정치 사회", 4)
     
     gainers_html, losers_html = "", ""
-    
     for kor_brand, data in STOCK_MAP.items():
-        ticker = data['ticker']
-        eng_name = data['eng']
+        ticker, eng_name = data['ticker'], data['eng']
         d = get_stock_details(ticker)
         if not d: continue
         news = fetch_stock_news_de_dupe(kor_brand, eng_name, ticker)
@@ -209,6 +206,7 @@ if __name__ == "__main__":
         else: losers_html += card
         time.sleep(0.1)
 
+    today_str = datetime.now().strftime('%m/%d')
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -220,7 +218,7 @@ if __name__ == "__main__":
         <div style="max-width: 1100px; margin: auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
             <div style="background: #1a1a1a; padding: 15px; text-align: center; color: #fff;">
                 <h1 style="margin: 0; font-size: 20px;">🏛️ VIP STRATEGY DASHBOARD</h1>
-                <p style="font-size: 11px; color: #aaa; margin-top: 4px;">{TODAY_STR} PREMIUM MARKET INTELLIGENCE</p>
+                <p style="font-size: 11px; color: #aaa; margin-top: 4px;">{today_str} PREMIUM MARKET INTELLIGENCE</p>
             </div>
             <div style="padding: 10px; background: #f8f9fa; border-bottom: 1px solid #eee; text-align: center; font-size: 12px;">
                 <span class="dot"></span> <b>LIVE:</b> {m_context}
@@ -235,10 +233,10 @@ if __name__ == "__main__":
                             • <b>저점대비:</b> <span style="color:#1a73e8;">10%↓바닥</span> / <span style="color:#d93025;">30%↑과열</span><br>
                             • <b>PER:</b> <span style="color:#1a73e8;">25↓저평가</span> / <span style="color:#d93025;">40↑고평가</span>
                         </div>
-                        <div style="padding: 6px; background: #1a73e8; color: #fff; font-weight: bold; border-radius: 4px; margin-bottom: 10px; font-size: 12px; text-align: center;">🇰🇷 KOREA HEADLINES ({TODAY_STR})</div>
-                        {domestic_total if domestic_total else "<li>검색된 오늘 기사 없음</li>"}
-                        <div style="padding: 6px; background: #d93025; color: #fff; font-weight: bold; border-radius: 4px; margin-top: 20px; margin-bottom: 10px; font-size: 12px; text-align: center;">🇺🇸 US CORE NEWS ({TODAY_STR})</div>
-                        {intl_total if intl_total else "<li>검색된 오늘 기사 없음</li>"}
+                        <div style="padding: 6px; background: #1a73e8; color: #fff; font-weight: bold; border-radius: 4px; margin-bottom: 10px; font-size: 12px; text-align: center;">🇰🇷 KOREA HEADLINES</div>
+                        {domestic_total if domestic_total else "<li>검색된 기사가 없습니다.</li>"}
+                        <div style="padding: 6px; background: #d93025; color: #fff; font-weight: bold; border-radius: 4px; margin-top: 20px; margin-bottom: 10px; font-size: 12px; text-align: center;">🇺🇸 US CORE NEWS</div>
+                        {intl_total if intl_total else "<li>검색된 기사가 없습니다.</li>"}
                     </td>
                     <td width="35%" valign="top" style="padding: 15px; border-right: 1px solid #eee;">
                         <div style="padding: 6px; background: #d93025; color: #fff; font-weight: bold; border-radius: 4px; margin-bottom: 15px; font-size: 12px; text-align: center;">📈 ADVANCING STOCKS</div>
@@ -256,12 +254,12 @@ if __name__ == "__main__":
     """
     
     msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"[{TODAY_STR}] 🏛️ 데일리 뉴스 프리미엄 리포트 ✨"
+    msg['Subject'] = f"[{today_str}] 🏛️ 데일리 뉴스 프리미엄 대시보드 ✨"
     msg['From'], msg['To'] = EMAIL_ADDRESS, ", ".join(RECIPIENTS)
     msg.attach(MIMEText(html, "html"))
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             s.send_message(msg)
-        print(f"✅ v4.7 발송 완료 (기준일: {TODAY_STR})")
+        print("✅ v4.8 발송 완료 (뉴스 수집 안정화)")
     except Exception as e: print(f"❌ 발송 실패: {e}")
