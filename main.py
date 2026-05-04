@@ -2,13 +2,13 @@
 ================================================================================
 [ 🏛️ VIP 주식 전략 리포트 - 통합 설계 변경 이력 (Design Change History) ]
 ================================================================================
-최종 수정일: 2026-05-04 | 현재 버전: v5.0
+최종 수정일: 2026-05-04 | 현재 버전: v5.1
 --------------------------------------------------------------------------------
 날짜        | 버전         | 설계 변경 및 업데이트 내역
 --------------------------------------------------------------------------------
-2026-02-10 | v1.0~v4.4   | 초기 구축, 3단 분할 레이아웃, 메이저 언론사 필터 도입
-2026-04-28 | v4.5~v4.8   | 종목 추가, 3단 분할(상승/하락), 뉴스 수집 안정화
-2026-05-04 | v5.0         | [최신] 수익률순 정렬, RSI/거래량/52주 지표 추가 및 가이드 보강
+2026-02-10 | v1.0~v4.8   | 초기 구축, 3단 분할 레이아웃, 뉴스 필터링 및 안정화
+2026-05-04 | v5.0         | 수익률순 정렬, RSI/거래량/52주 지표 추가 및 가이드 보강
+2026-05-04 | v5.1         | [최신] 전 지표 색상 구분(빨/검/파), 가이드 설명 보강, 제목 변경
 ================================================================================
 """
 
@@ -32,7 +32,7 @@ RECIPIENTS = [
     "jhkang@spigen.com"
 ]
 
-# [2. 분석 대상 종목 - v4.5 반영분 유지]
+# [2. 분석 대상 종목]
 STOCK_MAP = {
     "애플": {"ticker": "AAPL", "eng": "Apple"},
     "마이크로소프트": {"ticker": "MSFT", "eng": "Microsoft"},
@@ -58,7 +58,6 @@ GLOBAL_SEEN_WORD_SETS = []
 GLOBAL_SEEN_LINKS = set()
 
 def calculate_rsi(ticker, period=14):
-    """[v5.0] RSI 계산 로직 추가"""
     try:
         data = yf.download(ticker, period='1mo', interval='1d', progress=False)
         if len(data) < period: return 50
@@ -90,50 +89,62 @@ def get_market_summary():
     except: return "시장 데이터 로딩 중..."
 
 def get_stock_details(kor_brand, eng_name, ticker):
-    """[v5.0] 고도화 지표(RSI, 거래량, 52주 근접도) 수집 로직"""
+    """[v5.1] 모든 지표에 대해 빨강(긍정)/검정(보통)/파랑(부정) 색상 로직 적용"""
     try:
         s = yf.Ticker(ticker)
         f, info = s.fast_info, s.info
         curr, prev = f['last_price'], f['previous_close']
         pct = ((curr - prev) / prev) * 100
         
-        # 기본 지표
+        # 1. 상승여력 (Target Upside)
         target = info.get('targetMeanPrice', 0)
         upside_val = ((target / curr) - 1) * 100 if target > 0 else 0
         u_color = "#d93025" if upside_val > 15 else ("#1a73e8" if upside_val < 0 else "#111")
         
+        # 2. PER
         per = info.get('trailingPE', 0)
-        p_color = "#d93025" if (isinstance(per, (int, float)) and per < 25) else ("#1a73e8" if (isinstance(per, (int, float)) and per > 40) else "#f9ab00")
+        p_color = "#d93025" if (isinstance(per, (int, float)) and per < 20) else ("#1a73e8" if (isinstance(per, (int, float)) and per > 40) else "#111")
         
+        # 3. 배당 (Dividend)
         div = info.get('dividendYield', 0)
-        div_val = div if (div and div < 0.2) else (div / 100 if div else 0)
+        div_val = (div if (div and div < 0.2) else (div / 100 if div else 0)) * 100
+        d_color = "#d93025" if div_val >= 3 else ("#1a73e8" if div_val < 1 and div_val > 0 else "#111")
         
+        # 4. 저점/고점 근접도 (52w Range)
         dist_low = ((curr / f['year_low']) - 1) * 100
-        l_color = "#d93025" if dist_low < 10 else ("#1a73e8" if dist_low > 30 else "#111")
+        l_color = "#d93025" if dist_low < 10 else ("#1a73e8" if dist_low > 40 else "#111")
         
-        # [v5.0 추가 지표]
+        dist_high = ((curr / f['year_high']) - 1) * 100
+        h_color = "#d93025" if dist_high > -5 else ("#1a73e8" if dist_high < -25 else "#111")
+        
+        # 5. RSI
         rsi_val = calculate_rsi(ticker)
         r_color = "#d93025" if rsi_val < 35 else ("#1a73e8" if rsi_val > 65 else "#111")
         
+        # 6. 거래량 (Volume Ratio)
         vol_ratio = (info.get('volume', 0) / info.get('averageVolume', 1)) if info.get('averageVolume') else 1
-        v_color = "#d93025" if vol_ratio > 1.5 else "#111"
+        v_color = "#d93025" if vol_ratio > 1.5 else ("#1a73e8" if vol_ratio < 0.7 else "#111")
         
-        dist_high = ((curr / f['year_high']) - 1) * 100
-        
+        # 7. 투자의견 (Opinion)
+        raw_op = info.get('recommendationKey', '').lower()
         opinion_map = {'strong_buy': '강력 매수', 'buy': '매수', 'hold': '보유(중립)', 'underperform': '수익률 하회', 'sell': '매도'}
-        kor_opinion = opinion_map.get(info.get('recommendationKey', '').lower(), '의견 없음')
+        kor_opinion = opinion_map.get(raw_op, '의견 없음')
+        if raw_op in ['strong_buy', 'buy']: op_color = "#d93025"
+        elif raw_op in ['underperform', 'sell']: op_color = "#1a73e8"
+        else: op_color = "#111"
 
         return {
             "kor_brand": kor_brand, "ticker": ticker, "eng_name": eng_name,
             "price": f"{curr:,.2f}", "pct": pct,
             "upside": f"{upside_val:+.1f}%", "u_color": u_color,
             "per": f"{per:.1f}" if isinstance(per, (int, float)) else "-", "p_color": p_color,
-            "div": f"{div_val*100:.2f}%", "d_color": "#d93025" if (div_val*100) >= 3 else "#111",
+            "div": f"{div_val:.2f}%", "d_color": d_color,
             "dist_low": f"{dist_low:+.1f}%", "l_color": l_color,
-            "dist_high": f"{dist_high:+.1f}%",
+            "dist_high": f"{dist_high:+.1f}%", "h_color": h_color,
             "rsi": f"{rsi_val:.1f}", "r_color": r_color,
             "vol_ratio": f"{vol_ratio:.1f}배", "v_color": v_color,
-            "opinion": kor_opinion
+            "opinion": kor_opinion, "op_color": op_color,
+            "cap": f"{info.get('marketCap', 0) / 1_000_000_000_000:,.1f}T"
         }
     except: return None
 
@@ -191,10 +202,9 @@ def fetch_stock_news_de_dupe(kor_brand, eng_name, ticker):
     except: return "<li>뉴스 로딩 실패</li>"
 
 if __name__ == "__main__":
-    print("🚀 VIP 리포트 v5.0 고도화 엔진 가동...")
+    print("🚀 📈쏘큐일보 v5.1 가동...")
     m_context = get_market_summary()
     
-    # [v5.0 뉴스 수집]
     domestic_total = fetch_outlet_news("연합뉴스", "yna.co.kr", "주요 뉴스", 4) + \
                      fetch_outlet_news("한국경제", "hankyung.com", "경제", 4) + \
                      fetch_outlet_news("매일경제", "mk.co.kr", "경제", 4)
@@ -202,13 +212,11 @@ if __name__ == "__main__":
                  fetch_outlet_news("뉴스1 국제", "news1.kr", "미국 정치 사회", 4) + \
                  fetch_outlet_news("뉴시스 국제", "newsis.com", "미국 정치 사회", 4)
     
-    # [v5.0 데이터 수집 및 분류/정렬]
     all_stocks_data = []
     for kor_brand, data in STOCK_MAP.items():
         details = get_stock_details(kor_brand, data['eng'], data['ticker'])
         if details: all_stocks_data.append(details)
     
-    # 상승/하락 분류 후 정렬 (수익률 높은 순 / 낮은 순)
     gainers_list = sorted([s for s in all_stocks_data if s['pct'] >= 0], key=lambda x: x['pct'], reverse=True)
     losers_list = sorted([s for s in all_stocks_data if s['pct'] < 0], key=lambda x: x['pct'])
 
@@ -232,9 +240,9 @@ if __name__ == "__main__":
                         <div>배당: <b style="color:{s['d_color']};">{s['div']}</b></div>
                         <div>RSI: <b style="color:{s['r_color']};">{s['rsi']}</b></div>
                         <div>거래량: <b style="color:{s['v_color']};">{s['vol_ratio']}</b></div>
-                        <div>신고가: <b>{s['dist_high']}</b></div>
-                        <div>신저가: <b>{s['dist_low']}</b></div>
-                        <div style="grid-column: span 2; border-top:1px solid #eee; padding-top:4px; margin-top:2px;">의견: <b>{s['opinion']}</b></div>
+                        <div>신고가: <b style="color:{s['h_color']};">{s['dist_high']}</b></div>
+                        <div>신저가: <b style="color:{s['l_color']};">{s['dist_low']}</b></div>
+                        <div style="grid-column: span 2; border-top:1px solid #eee; padding-top:4px; margin-top:2px;">의견: <b style="color:{s['op_color']};">{s['opinion']}</b></div>
                     </div>
                     <ul style="margin:0; padding-left:12px; color:#555; font-size:10px; line-height:1.3;">{news}</ul>
                 </div>
@@ -256,8 +264,8 @@ if __name__ == "__main__":
     <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; padding: 5px; color: #1a1a1a;">
         <div style="max-width: 1200px; margin: auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
             <div style="background: #1a1a1a; padding: 15px; text-align: center; color: #fff;">
-                <h1 style="margin: 0; font-size: 20px;">🏛️ VIP STRATEGY DASHBOARD</h1>
-                <p style="font-size: 11px; color: #aaa; margin-top: 4px;">{today_str} PREMIUM MARKET INTELLIGENCE</p>
+                <h1 style="margin: 0; font-size: 22px;">🏛️ [📈 쏘큐일보]</h1>
+                <p style="font-size: 11px; color: #aaa; margin-top: 4px;">{today_str} VIP PREMIUM STRATEGY DASHBOARD</p>
             </div>
             <div style="padding: 10px; background: #f8f9fa; border-bottom: 1px solid #eee; text-align: center; font-size: 12px;">
                 <span class="dot"></span> <b>LIVE MARKET:</b> {m_context}
@@ -268,12 +276,14 @@ if __name__ == "__main__":
                     <td width="30%" valign="top" style="padding: 15px; background: #fafafa; border-right: 1px solid #eee;">
                         <div style="background: #fff; border: 1px solid #eee; padding: 12px; border-radius: 8px; font-size: 10.5px; line-height: 1.6; margin-bottom: 15px;">
                             <b style="color:#555;">[📊 투자 지표 가이드]</b><br>
-                            • <b>공포지수:</b> <span style="color:#d93025;">20↓안정(매수)</span> / <span style="color:#1a73e8;">30↑패닉</span><br>
-                            • <b>상승여력:</b> <span style="color:#d93025;">15%↑기회</span> / <span style="color:#1a73e8;">마이너스(위험)</span><br>
-                            • <b>저점대비:</b> <span style="color:#d93025;">10%↓바닥</span> / <span style="color:#1a73e8;">30%↑과열</span><br>
-                            • <b>PER:</b> <span style="color:#d93025;">25↓저평가</span> / <span style="color:#1a73e8;">40↑고평가</span><br>
-                            • <b>RSI:</b> <span style="color:#d93025;">35↓과매도(기회)</span> / <span style="color:#1a73e8;">65↑과열</span><br>
-                            • <b>거래량:</b> <span style="color:#d93025;">1.5배↑폭발</span> / 평소수준
+                            <span style="font-size:9.5px; color:#999;">(🔴:긍정/기회 | ⚫:보통 | 🔵:부정/위험)</span><br>
+                            • <b>공포지수:</b> <span style="color:#d93025;">20↓안정</span> / <span style="color:#1a73e8;">30↑패닉</span><br>
+                            • <b>상승여력:</b> <span style="color:#d93025;">15%↑기회</span> / <span style="color:#1a73e8;">마이너스</span><br>
+                            • <b>저점대비:</b> <span style="color:#d93025;">10%↓바닥</span> / <span style="color:#1a73e8;">40%↑과열</span><br>
+                            • <b>PER:</b> <span style="color:#d93025;">20↓저평가</span> / <span style="color:#1a73e8;">40↑고평가</span><br>
+                            • <b>배당:</b> <span style="color:#d93025;">3%↑고배당</span> / <span style="color:#1a73e8;">1%↓저배당</span><br>
+                            • <b>RSI:</b> <span style="color:#d93025;">35↓과매도(매수)</span> / <span style="color:#1a73e8;">65↑과매수</span><br>
+                            • <b>거래량:</b> <span style="color:#d93025;">1.5배↑폭발</span> / <span style="color:#1a73e8;">0.7↓소외</span>
                         </div>
                         <div style="padding: 6px; background: #1a73e8; color: #fff; font-weight: bold; border-radius: 4px; margin-bottom: 10px; font-size: 12px; text-align: center;">🇰🇷 KOREA HEADLINES</div>
                         {domestic_total}
@@ -290,21 +300,18 @@ if __name__ == "__main__":
                     </td>
                 </tr>
             </table>
-            <div style="padding: 15px; text-align: center; border-top: 1px solid #eee; font-size: 10px; color: #999; background: #fcfcfc;">
-                SPIGEN VIP ASSET MANAGEMENT (v5.0) | Sorting by Performance
-            </div>
         </div>
     </body>
     </html>
     """
     
     msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"[{today_str}] 🏛️ 프리미엄 전략 대시보드 (수익률 정렬) ✨"
+    msg['Subject'] = f"[{today_str}] 📈 쏘큐일보 ✨"
     msg['From'], msg['To'] = EMAIL_ADDRESS, ", ".join(RECIPIENTS)
     msg.attach(MIMEText(html, "html"))
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             s.send_message(msg)
-        print("✅ v5.0 수익률 정렬 및 고도화 지표 적용 완료!")
+        print("✅ 📈쏘큐일보 v5.1 발송 완료!")
     except Exception as e: print(f"❌ 발송 실패: {e}")
